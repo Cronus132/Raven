@@ -1,0 +1,27 @@
+# deps
+node_modules/
+.pnp.*
+
+# builds
+dist/
+build/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# editor / os
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# rust (later)
+target/
+
+# logs
+*.log
+npm-debug.log*
