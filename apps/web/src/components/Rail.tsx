@@ -3,6 +3,7 @@ import { MessageSquare, Users, Phone, Archive, Settings, type LucideIcon } from 
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
 import { useChatStore } from "@/store/useChatStore";
+import { ProfileSheet } from "./ProfileSheet";
 
 const items: { id: string; icon: LucideIcon; label: string; badge?: number }[] = [
   { id: "chats", icon: MessageSquare, label: "Chats" },
@@ -14,6 +15,7 @@ const items: { id: string; icon: LucideIcon; label: string; badge?: number }[] =
 export function Rail() {
   const me = useChatStore((s) => s.me);
   const [active, setActive] = useState("chats");
+  const [profileOpen, setProfileOpen] = useState(false);
 
   return (
     <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-[var(--color-line)] bg-[var(--color-rail)] py-4">
@@ -34,9 +36,15 @@ export function Rail() {
       </div>
 
       <RailButton icon={Settings} label="Settings" active={active === "settings"} onClick={() => setActive("settings")} />
-      <button className="mt-2 rounded-full outline-none ring-[var(--color-accent)] transition focus-visible:ring-2" title={me.name}>
+      <button
+        onClick={() => setProfileOpen(true)}
+        className="mt-2 rounded-full outline-none ring-[var(--color-accent)] transition hover:opacity-90 focus-visible:ring-2"
+        title={`${me.name} — account`}
+      >
         <Avatar name={me.name} hue={me.avatarHue} size="md" presence={me.presence} />
       </button>
+
+      {profileOpen && <ProfileSheet onClose={() => setProfileOpen(false)} />}
     </nav>
   );
 }

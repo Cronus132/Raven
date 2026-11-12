@@ -1,13 +1,11 @@
+import { useEffect, useState } from "react";
 import { X, ShieldCheck, Clock, Bell, BellOff, Fingerprint, Images, FileText, Trash2, QrCode } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
+import { useIdentityStore } from "@/store/useIdentityStore";
 import { Avatar } from "./Avatar";
 import { TrustBadge } from "./TrustBadge";
 import { cn, formatDuration } from "@/lib/utils";
 import type { Conversation } from "@/types";
-
-// Demo safety number — in the real app this is a hash of both identity keys,
-// surfaced by CryptoEngine.safetyNumber().
-const SAFETY = "48291 03756 11840 29573 60142 88301 55927 41068 73214 90685 12403 77859";
 
 export function DetailsPanel({ conv }: { conv: Conversation }) {
   const toggleDetails = useChatStore((s) => s.toggleDetails);
@@ -49,7 +47,7 @@ export function DetailsPanel({ conv }: { conv: Conversation }) {
 
       <Section title="Encryption">
         <Row icon={ShieldCheck} label="End-to-end encrypted" value={conv.kind === "group" ? "MLS · RFC 9420" : "Signal · Double Ratchet"} accent />
-        <SafetyNumberRow />
+        {conv.kind === "direct" && other && <SafetyNumberRow remoteUserId={other.id} />}
       </Section>
 
       <Section title="Settings">
@@ -150,7 +148,18 @@ function ToggleRow({ icon: Icon, label, on }: { icon: typeof Bell; label: string
   );
 }
 
-function SafetyNumberRow() {
+function SafetyNumberRow({ remoteUserId }: { remoteUserId: string }) {
+  const safetyNumberWith = useIdentityStore((s) => s.safetyNumberWith);
+  const [safety, setSafety] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void safetyNumberWith(remoteUserId).then((v) => active && setSafety(v));
+    return () => {
+      active = false;
+    };
+  }, [remoteUserId, safetyNumberWith]);
+
   return (
     <div className="rounded-[var(--radius-sm)] px-2 py-2">
       <div className="flex items-center gap-3">
@@ -161,7 +170,7 @@ function SafetyNumberRow() {
         </button>
       </div>
       <p className="mt-2 rounded-[var(--radius-xs)] bg-[var(--color-base)] p-2 font-mono text-[11px] leading-relaxed tracking-wide text-[var(--color-ink-dim)] ring-1 ring-[var(--color-line)]">
-        {SAFETY}
+        {safety ?? "Computing…"}
       </p>
       <p className="mt-1.5 px-0.5 text-[11px] text-[var(--color-ink-faint)]">
         Compare these digits in person or over a trusted channel to confirm no one is intercepting.
