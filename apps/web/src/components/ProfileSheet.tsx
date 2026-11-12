@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X, Lock, Mail, Smartphone, Fingerprint, ShieldCheck, Copy, Check, Trash2 } from "lucide-react";
+import { X, Lock, Mail, Smartphone, Fingerprint, ShieldCheck, Copy, Check, Trash2, KeyRound, Loader2, Plus } from "lucide-react";
 import { useIdentityStore } from "@/store/useIdentityStore";
 import { Avatar } from "./Avatar";
 import { cn } from "@/lib/utils";
@@ -9,10 +9,37 @@ export function ProfileSheet({ onClose }: { onClose: () => void }) {
   const lock = useIdentityStore((s) => s.lock);
   const wipe = useIdentityStore((s) => s.wipe);
   const fingerprint = useIdentityStore((s) => s.fingerprint)();
+  const passkeySupported = useIdentityStore((s) => s.passkeySupported);
+  const hasPasskey = useIdentityStore((s) => s.hasPasskey);
+  const enrollPasskey = useIdentityStore((s) => s.enrollPasskey);
+  const removePasskey = useIdentityStore((s) => s.removePasskey);
   const [copied, setCopied] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
+  const [pkBusy, setPkBusy] = useState(false);
+  const [pkError, setPkError] = useState<string | null>(null);
 
   if (!meta) return null;
+
+  const addPasskey = async () => {
+    setPkBusy(true);
+    setPkError(null);
+    try {
+      await enrollPasskey();
+    } catch (e) {
+      setPkError(e instanceof Error ? e.message : "Couldn't add a passkey.");
+    } finally {
+      setPkBusy(false);
+    }
+  };
+
+  const dropPasskey = async () => {
+    setPkBusy(true);
+    try {
+      await removePasskey();
+    } finally {
+      setPkBusy(false);
+    }
+  };
 
   const copyFingerprint = async () => {
     if (!fingerprint) return;
@@ -63,6 +90,41 @@ export function ProfileSheet({ onClose }: { onClose: () => void }) {
             >
               {copied ? <Check className="h-4 w-4 text-[var(--color-accent)]" /> : <Copy className="h-4 w-4" />}
             </button>
+          </div>
+        </div>
+
+        <div className="border-t border-[var(--color-line)] px-4 py-3">
+          <div className="flex items-start gap-3 rounded-[var(--radius-md)] bg-[var(--color-base)] px-3 py-2.5 ring-1 ring-[var(--color-line)]">
+            <KeyRound className="mt-0.5 h-[18px] w-[18px] shrink-0 text-[var(--color-accent)]" />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-medium text-[var(--color-ink)]">Passkey unlock</p>
+              <p className="mt-0.5 text-[11.5px] leading-snug text-[var(--color-ink-faint)]">
+                {hasPasskey
+                  ? "Enabled — unlock with your device authenticator. Your passphrase still works."
+                  : passkeySupported
+                    ? "Unlock with Face ID, Windows Hello, or a security key instead of typing your passphrase."
+                    : "Not available in this browser or on this device."}
+              </p>
+              {pkError && <p className="mt-1 text-[11.5px] text-[var(--color-warn)]">{pkError}</p>}
+            </div>
+            {hasPasskey ? (
+              <button
+                onClick={() => void dropPasskey()}
+                disabled={pkBusy}
+                className="shrink-0 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--color-ink-faint)] transition hover:text-[var(--color-warn)] disabled:opacity-60"
+              >
+                {pkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Remove"}
+              </button>
+            ) : passkeySupported ? (
+              <button
+                onClick={() => void addPasskey()}
+                disabled={pkBusy}
+                className="flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--color-accent)] transition hover:bg-[color-mix(in_oklab,var(--color-accent)_24%,transparent)] disabled:opacity-60"
+              >
+                {pkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                Add
+              </button>
+            ) : null}
           </div>
         </div>
 

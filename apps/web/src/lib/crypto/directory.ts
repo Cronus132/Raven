@@ -10,6 +10,7 @@
 
 import { ed25519 } from "@noble/curves/ed25519";
 import type { PreKeyBundle } from "./engine";
+import type { DeviceSecret } from "./identity";
 import { sha256, utf8 } from "./primitives";
 
 export interface DirectoryDeviceList {
@@ -19,6 +20,12 @@ export interface DirectoryDeviceList {
 
 export interface KeyDirectory {
   publish(bundle: PreKeyBundle): Promise<void>;
+  /**
+   * Publish a device's full public key set (identity + signed prekey + every
+   * one-time prekey). Backends that can store a prekey pool implement this; the
+   * store prefers it over `publish`, which only carries a single bundle.
+   */
+  publishKeys?(secret: DeviceSecret, userId: string): Promise<void>;
   /** Fetch a device's bundle, consuming a one-time prekey server-side on real backends. */
   fetchBundle(userId: string, deviceId?: string): Promise<PreKeyBundle | undefined>;
   /** The stable identity key for a user's primary device (for safety numbers). */
@@ -27,7 +34,7 @@ export interface KeyDirectory {
 }
 
 /** Deterministic demo identity key so safety numbers are stable per contact. */
-function demoIdentityKey(userId: string): Uint8Array {
+export function demoIdentityKey(userId: string): Uint8Array {
   const seed = sha256(utf8(`raven-demo-identity:${userId}`));
   return ed25519.getPublicKey(seed);
 }

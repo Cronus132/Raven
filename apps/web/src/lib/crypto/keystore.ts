@@ -27,6 +27,7 @@ const DB_NAME = "raven";
 const DB_VERSION = 1;
 const STORE = "identity";
 const SELF_KEY = "self";
+const PASSKEY_KEY = "passkey";
 
 export interface AccountMeta {
   userId: string;
@@ -44,6 +45,16 @@ interface StoredEnvelope {
   kdf: KdfParams;
   iv: string; // base64
   ciphertext: string; // base64 (sealed DeviceSecret)
+}
+
+/** Passphrase sealed under a passkey's WebAuthn-PRF secret (for passkey unlock). */
+export interface PasskeyEnvelope {
+  version: 1;
+  credentialId: string; // base64 raw credential id
+  salt: string; // base64 PRF salt
+  iv: string; // base64
+  ciphertext: string; // base64 (sealed passphrase)
+  aad: string; // userId bound as additional authenticated data
 }
 
 // ---- tiny IndexedDB helper --------------------------------------------------
@@ -204,4 +215,19 @@ export async function updateSecret(secret: DeviceSecret, passphrase: string): Pr
 
 export async function wipeIdentity(): Promise<void> {
   await idbDelete(SELF_KEY);
+  await idbDelete(PASSKEY_KEY);
+}
+
+// ---- passkey envelope -------------------------------------------------------
+
+export async function savePasskeyEnvelope(env: PasskeyEnvelope): Promise<void> {
+  await idbPut(PASSKEY_KEY, env);
+}
+
+export async function loadPasskeyEnvelope(): Promise<PasskeyEnvelope | undefined> {
+  return idbGet<PasskeyEnvelope>(PASSKEY_KEY);
+}
+
+export async function deletePasskeyEnvelope(): Promise<void> {
+  await idbDelete(PASSKEY_KEY);
 }
