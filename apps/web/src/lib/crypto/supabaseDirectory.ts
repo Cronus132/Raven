@@ -19,6 +19,7 @@ import type { BundleSource } from "./messaging";
 import { type KeyDirectory, type DirectoryDeviceList, demoIdentityKey } from "./directory";
 import { fromBase64, toBase64 } from "./primitives";
 import { supabase, isUuid } from "@/lib/backend/supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 interface ClaimedBundle {
   deviceId: string;
@@ -32,21 +33,25 @@ interface ClaimedBundle {
   oneTimePreKey: string | null;
 }
 
-function client() {
-  if (!supabase) throw new Error("Supabase not configured");
-  return supabase;
-}
-
 export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
   private demo = new Map<string, Uint8Array>();
+  private readonly db: SupabaseClient | null;
 
-  constructor(demoUserIds: string[] = []) {
+  // `db` defaults to the app's authenticated client; tests inject their own so
+  // two accounts can run concurrently.
+  constructor(demoUserIds: string[] = [], db: SupabaseClient | null = supabase) {
     for (const id of demoUserIds) this.demo.set(id, demoIdentityKey(id));
+    this.db = db;
+  }
+
+  private client(): SupabaseClient {
+    if (!this.db) throw new Error("Supabase not configured");
+    return this.db;
   }
 
   /** Publish the device's full public key set. `userId` is the account uid (= auth.uid()). */
   async publishKeys(secret: DeviceSecret, userId: string): Promise<void> {
-    const db = client();
+    const db = this.client();
 
     const { error: devErr } = await db.from("devices").upsert(
       {
@@ -86,7 +91,7 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
 
   /** Minimal single-bundle publish (interface fallback; publishKeys is preferred). */
   async publish(bundle: PreKeyBundle): Promise<void> {
-    const db = client();
+    const db = this.client();
     await db.from("devices").upsert(
       {
         id: bundle.deviceId,
@@ -117,7 +122,7 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
   }
 
   private async primaryDeviceId(userId: string): Promise<string | undefined> {
-    const { data } = await client()
+    const { data } = await this.client()
       .from("devices")
       .select("id")
       .eq("user_id", userId)
@@ -131,7 +136,7 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
     const devId = deviceId ?? (await this.primaryDeviceId(userId));
     if (!devId) return undefined;
 
-    const { data, error } = await client().rpc("claim_prekey_bundle", { p_device_id: devId });
+    const { data, error } = await this.client().rpc("claim_prekey_bundle", { p_device_id: devId });
     if (error || !data) return undefined;
     const b = data as {
       deviceId: string;
@@ -159,7 +164,7 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
     const devId = deviceId ?? (await this.primaryDeviceId(userId));
     if (!devId) return undefined;
 
-    const { data, error } = await client().rpc("claim_prekey_bundle", { p_device_id: devId });
+    const { data, error } = await this.client().rpc("claim_prekey_bundle", { p_device_id: devId });
     if (error || !data) return undefined;
     const b = data as ClaimedBundle;
     return {
@@ -176,7 +181,7 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
 
   async identityKeyOf(userId: string): Promise<Uint8Array | undefined> {
     if (!isUuid(userId)) return this.demo.get(userId);
-    const { data } = await client()
+    const { data } = await this.client()
       .from("devices")
       .select("identity_key")
       .eq("user_id", userId)
@@ -188,7 +193,7 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
 
   async deviceList(userId: string): Promise<DirectoryDeviceList | undefined> {
     if (!isUuid(userId)) return undefined;
-    const { data } = await client().from("devices").select("id").eq("user_id", userId);
+    const { data } = await this.client().from("devices").select("id").eq("user_id", userId);
     const deviceIds = (data ?? []).map((r) => r.id as string);
     return deviceIds.length ? { userId, deviceIds } : undefined;
   }
