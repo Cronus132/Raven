@@ -191,6 +191,20 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
     return key ? fromBase64(key) : undefined;
   }
 
+  async findUserByUsername(username: string): Promise<{ userId: string; username: string } | undefined> {
+    const handle = username.trim().replace(/^@/, "").toLowerCase();
+    if (!handle) return undefined;
+    const { data } = await this.client().from("profiles").select("id,username").eq("username", handle).limit(1);
+    const row = data?.[0] as { id: string; username: string } | undefined;
+    return row ? { userId: row.id, username: row.username } : undefined;
+  }
+
+  async usernameOf(userId: string): Promise<string | undefined> {
+    if (!isUuid(userId)) return undefined;
+    const { data } = await this.client().from("profiles").select("username").eq("id", userId).limit(1);
+    return (data?.[0] as { username: string } | undefined)?.username;
+  }
+
   async deviceList(userId: string): Promise<DirectoryDeviceList | undefined> {
     if (!isUuid(userId)) return undefined;
     const { data } = await this.client().from("devices").select("id").eq("user_id", userId);

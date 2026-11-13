@@ -72,4 +72,8 @@ export interface Conversation {
   description?: string;
   adminIds?: string[];
   disappearingSeconds?: number;
+  // live (real, E2E) direct conversation: the peer's account id. Demo seed
+  // conversations leave this unset and use the simulated send path.
+  real?: boolean;
+  peerUserId?: string;
 }

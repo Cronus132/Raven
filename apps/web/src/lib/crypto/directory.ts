@@ -31,6 +31,10 @@ export interface KeyDirectory {
   /** The stable identity key for a user's primary device (for safety numbers). */
   identityKeyOf(userId: string): Promise<Uint8Array | undefined>;
   deviceList(userId: string): Promise<DirectoryDeviceList | undefined>;
+  /** Resolve a public @username to an account (for starting a conversation). */
+  findUserByUsername?(username: string): Promise<{ userId: string; username: string } | undefined>;
+  /** The public @username for an account id (for labeling inbound messages). */
+  usernameOf?(userId: string): Promise<string | undefined>;
 }
 
 /** Deterministic demo identity key so safety numbers are stable per contact. */

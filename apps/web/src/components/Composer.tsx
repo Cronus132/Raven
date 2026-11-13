@@ -1,12 +1,15 @@
 import { useEffect, useRef } from "react";
 import { Plus, Smile, Mic, SendHorizontal, Lock, X } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
+import { sendLive } from "@/lib/chat/liveMessaging";
 import { cn } from "@/lib/utils";
 import type { Conversation } from "@/types";
 
 export function Composer({ conv }: { conv: Conversation }) {
   const setDraft = useChatStore((s) => s.setDraft);
   const sendMessage = useChatStore((s) => s.sendMessage);
+  const appendOutgoing = useChatStore((s) => s.appendOutgoing);
+  const setMessageStatus = useChatStore((s) => s.setMessageStatus);
   const replyTo = useChatStore((s) => s.replyTo);
   const setReplyTo = useChatStore((s) => s.setReplyTo);
   const userById = useChatStore((s) => s.userById);
@@ -26,8 +29,17 @@ export function Composer({ conv }: { conv: Conversation }) {
   }, [conv.id, replyTo]);
 
   const send = () => {
-    if (!draft.trim()) return;
-    sendMessage(conv.id, draft);
+    const text = draft.trim();
+    if (!text) return;
+    if (conv.real && conv.peerUserId) {
+      // Real E2E send: optimistic bubble, then encrypt + relay.
+      const id = appendOutgoing(conv.id, text);
+      void sendLive(conv.peerUserId, text)
+        .then(() => setMessageStatus(id, "sent"))
+        .catch(() => setMessageStatus(id, "failed"));
+    } else {
+      sendMessage(conv.id, draft);
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {

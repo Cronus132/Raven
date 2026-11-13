@@ -113,6 +113,20 @@ async function idbDelete(key: string): Promise<void> {
   }
 }
 
+async function idbClear(): Promise<void> {
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 // ---- (de)serialization of the secret ---------------------------------------
 
 const kp = (k: KeyPair) => ({ priv: toBase64(k.priv), pub: toBase64(k.pub) });
@@ -170,7 +184,8 @@ export async function hasStoredIdentity(): Promise<boolean> {
   return (await idbGet<StoredEnvelope>(SELF_KEY)) !== undefined;
 }
 
-export async function saveIdentity(secret: DeviceSecret, meta: AccountMeta, passphrase: string): Promise<void> {
+/** Seal and store the identity; returns the derived wrapping key (reused for sessions). */
+export async function saveIdentity(secret: DeviceSecret, meta: AccountMeta, passphrase: string): Promise<Uint8Array> {
   const salt = randomBytes(16);
   const key = deriveWrappingKey(passphrase, salt, DEFAULT_KDF);
   const box = await aeadSeal(key, serializeSecret(secret), new TextEncoder().encode(meta.userId));
@@ -183,6 +198,7 @@ export async function saveIdentity(secret: DeviceSecret, meta: AccountMeta, pass
     ciphertext: toBase64(box.ciphertext),
   };
   await idbPut(SELF_KEY, env);
+  return key;
 }
 
 export class UnlockError extends Error {
@@ -192,14 +208,16 @@ export class UnlockError extends Error {
   }
 }
 
-export async function unlockIdentity(passphrase: string): Promise<{ secret: DeviceSecret; meta: AccountMeta }> {
+export async function unlockIdentity(
+  passphrase: string,
+): Promise<{ secret: DeviceSecret; meta: AccountMeta; wrappingKey: Uint8Array }> {
   const env = await idbGet<StoredEnvelope>(SELF_KEY);
   if (!env) throw new Error("No stored identity");
   const key = deriveWrappingKey(passphrase, fromBase64(env.salt), env.kdf);
   const box: SealedBox = { iv: fromBase64(env.iv), ciphertext: fromBase64(env.ciphertext) };
   try {
     const plaintext = await aeadOpen(key, box, new TextEncoder().encode(env.meta.userId));
-    return { secret: deserializeSecret(plaintext), meta: env.meta };
+    return { secret: deserializeSecret(plaintext), meta: env.meta, wrappingKey: key };
   } catch {
     // AEAD tag mismatch == wrong passphrase (or tampered store).
     throw new UnlockError();
@@ -214,8 +232,24 @@ export async function updateSecret(secret: DeviceSecret, passphrase: string): Pr
 }
 
 export async function wipeIdentity(): Promise<void> {
-  await idbDelete(SELF_KEY);
-  await idbDelete(PASSKEY_KEY);
+  // Clears the identity, passkey, and all persisted sessions.
+  await idbClear();
+}
+
+// ---- persisted sessions (opaque sealed blobs, keyed by peer) -----------------
+
+const SESSION_PREFIX = "session:";
+
+export async function saveSessionRecord(peerUserId: string, sealed: string): Promise<void> {
+  await idbPut(`${SESSION_PREFIX}${peerUserId}`, sealed);
+}
+
+export async function loadSessionRecord(peerUserId: string): Promise<string | undefined> {
+  return idbGet<string>(`${SESSION_PREFIX}${peerUserId}`);
+}
+
+export async function deleteSessionRecord(peerUserId: string): Promise<void> {
+  await idbDelete(`${SESSION_PREFIX}${peerUserId}`);
 }
 
 // ---- passkey envelope -------------------------------------------------------

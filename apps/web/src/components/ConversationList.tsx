@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Search, PenSquare, Pin, BellOff, Image as ImageIcon, FileText, Check, CheckCheck } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
 import { Avatar } from "./Avatar";
 import { TrustBadge } from "./TrustBadge";
+import { NewChatDialog } from "./NewChatDialog";
 import { cn, formatRelative } from "@/lib/utils";
 import type { Conversation, Message } from "@/types";
 
@@ -17,6 +18,7 @@ export function ConversationList() {
   const select = useChatStore((s) => s.select);
   const setFilter = useChatStore((s) => s.setFilter);
   const setSearch = useChatStore((s) => s.setSearch);
+  const [newChatOpen, setNewChatOpen] = useState(false);
 
   const lastByConv = useMemo(() => {
     const map: Record<string, Message | undefined> = {};
@@ -48,12 +50,15 @@ export function ConversationList() {
       <header className="flex items-center justify-between px-4 pb-2 pt-4">
         <h1 className="text-[17px] font-semibold tracking-tight">Messages</h1>
         <button
+          onClick={() => setNewChatOpen(true)}
           className="grid h-9 w-9 place-items-center rounded-full text-[var(--color-ink-dim)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-ink)]"
           title="New message"
         >
           <PenSquare className="h-[18px] w-[18px]" />
         </button>
       </header>
+
+      {newChatOpen && <NewChatDialog onClose={() => setNewChatOpen(false)} />}
 
       <div className="px-4 pb-3">
         <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-base)] px-3 py-2 ring-1 ring-[var(--color-line)] focus-within:ring-[color-mix(in_oklab,var(--color-accent)_40%,var(--color-line))]">

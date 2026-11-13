@@ -20,6 +20,7 @@ import {
   removePasskey as removePasskeyStored,
 } from "@/lib/crypto/passkey";
 import { supabase, isSupabaseConfigured, deriveAuthPassword } from "@/lib/backend/supabase";
+import { startMessaging, stopMessaging } from "@/lib/chat/liveMessaging";
 import { USERS } from "@/data/seed";
 import { useChatStore } from "./useChatStore";
 
@@ -139,10 +140,12 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
         identityKey: toBase64(secret.identityEd.pub),
         createdAt: Date.now(),
       };
-      await saveIdentity(secret, meta, passphrase);
+      const wrappingKey = await saveIdentity(secret, meta, passphrase);
       await publishDevice(secret, userId);
       syncMe(meta);
       set({ status: "unlocked", secret, meta, passphrase, busy: false });
+      // Supabase sign-up already has a session, so start live messaging now.
+      void startMessaging(secret, meta, wrappingKey, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Registration failed" });
     }
@@ -153,18 +156,21 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     try {
       // The local encrypted key store is the authoritative gate — unlocking it
       // never depends on the network.
-      const { secret, meta } = await unlockIdentity(passphrase);
+      const { secret, meta, wrappingKey } = await unlockIdentity(passphrase);
       syncMe(meta);
       set({ status: "unlocked", secret, meta, passphrase, busy: false });
 
-      // Best-effort: establish a server session and refresh published keys.
-      // Failure (offline, directory down) leaves the app usably unlocked.
+      // Best-effort: establish a server session, refresh published keys, and
+      // bring messaging online. Failure (offline) leaves the app usably unlocked.
       if (isSupabaseConfigured && supabase) {
         void (async () => {
           try {
             const password = deriveAuthPassword(meta.email, passphrase);
             const { error } = await supabase.auth.signInWithPassword({ email: meta.email.trim(), password });
-            if (!error) await publishDevice(secret, meta.userId);
+            if (!error) {
+              await publishDevice(secret, meta.userId);
+              await startMessaging(secret, meta, wrappingKey, directory);
+            }
           } catch {
             /* local unlock already succeeded; directory sync can wait */
           }
@@ -205,11 +211,13 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   },
 
   lock: () => {
+    stopMessaging();
     if (supabase) void supabase.auth.signOut();
     set({ status: "locked", secret: null, passphrase: null, error: null });
   },
 
   wipe: async () => {
+    stopMessaging();
     const meta = get().meta;
     if (supabase) {
       try {
