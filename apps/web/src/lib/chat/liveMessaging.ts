@@ -49,7 +49,7 @@ export async function startMessaging(
     } catch {
       /* label fallback */
     }
-    useChatStore.getState().receiveLiveMessage({ peerUserId: m.from, username, text: m.text });
+    useChatStore.getState().receiveLiveMessage({ peerUserId: m.from, username, text: m.text, outgoing: m.outgoing });
   };
 
   // Realtime postgres_changes enforces RLS via the socket's auth token.

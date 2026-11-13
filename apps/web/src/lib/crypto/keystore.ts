@@ -239,17 +239,18 @@ export async function wipeIdentity(): Promise<void> {
 // ---- persisted sessions (opaque sealed blobs, keyed by peer) -----------------
 
 const SESSION_PREFIX = "session:";
+const sessionKey = (peerUserId: string, peerDevice: string) => `${SESSION_PREFIX}${peerUserId}/${peerDevice}`;
 
-export async function saveSessionRecord(peerUserId: string, sealed: string): Promise<void> {
-  await idbPut(`${SESSION_PREFIX}${peerUserId}`, sealed);
+export async function saveSessionRecord(peerUserId: string, peerDevice: string, sealed: string): Promise<void> {
+  await idbPut(sessionKey(peerUserId, peerDevice), sealed);
 }
 
-export async function loadSessionRecord(peerUserId: string): Promise<string | undefined> {
-  return idbGet<string>(`${SESSION_PREFIX}${peerUserId}`);
+export async function loadSessionRecord(peerUserId: string, peerDevice: string): Promise<string | undefined> {
+  return idbGet<string>(sessionKey(peerUserId, peerDevice));
 }
 
-export async function deleteSessionRecord(peerUserId: string): Promise<void> {
-  await idbDelete(`${SESSION_PREFIX}${peerUserId}`);
+export async function deleteSessionRecord(peerUserId: string, peerDevice: string): Promise<void> {
+  await idbDelete(sessionKey(peerUserId, peerDevice));
 }
 
 // ---- passkey envelope -------------------------------------------------------
