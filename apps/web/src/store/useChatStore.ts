@@ -36,7 +36,14 @@ interface ChatState {
   appendOutgoing: (conversationId: string, body: string) => string;
   setMessageStatus: (messageId: string, status: MessageStatus) => void;
   startLiveConversation: (peer: { peerUserId: string; username: string }) => string;
-  receiveLiveMessage: (msg: { peerUserId: string; username: string; text: string; outgoing?: boolean }) => void;
+  receiveLiveMessage: (msg: {
+    peerUserId: string;
+    username: string;
+    text: string;
+    outgoing?: boolean;
+    remoteId?: string;
+  }) => void;
+  inboundRemoteIds: (conversationId: string) => string[];
 }
 
 function hueFromId(s: string): number {
@@ -195,7 +202,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return convId;
   },
 
-  receiveLiveMessage: ({ peerUserId, username, text, outgoing }) => {
+  inboundRemoteIds: (conversationId) =>
+    get()
+      .messages.filter((m) => m.conversationId === conversationId && m.senderId !== "me" && m.remoteId)
+      .map((m) => m.remoteId as string),
+
+  receiveLiveMessage: ({ peerUserId, username, text, outgoing, remoteId }) => {
     set((s) => {
       const { users, conversations, convId } = ensureLivePeer(s, peerUserId, username);
       // `outgoing` = a copy of our own message synced from another of our devices.
@@ -207,6 +219,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         body: text,
         createdAt: Date.now(),
         status: outgoing ? "sent" : "read",
+        remoteId: outgoing ? undefined : remoteId,
       };
       const bump = !outgoing && s.activeId !== convId;
       return {

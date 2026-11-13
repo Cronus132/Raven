@@ -49,7 +49,14 @@ export async function startMessaging(
     } catch {
       /* label fallback */
     }
-    useChatStore.getState().receiveLiveMessage({ peerUserId: m.from, username, text: m.text, outgoing: m.outgoing });
+    useChatStore
+      .getState()
+      .receiveLiveMessage({ peerUserId: m.from, username, text: m.text, outgoing: m.outgoing, remoteId: m.id });
+  };
+
+  svc.onReceipt = (r) => {
+    const setStatus = useChatStore.getState().setMessageStatus;
+    for (const id of r.ids) setStatus(id, r.kind);
   };
 
   // Realtime postgres_changes enforces RLS via the socket's auth token.
@@ -70,9 +77,14 @@ export function stopMessaging(): void {
   directoryRef = null;
 }
 
-export async function sendLive(peerUserId: string, text: string): Promise<void> {
+export async function sendLive(peerUserId: string, text: string, messageId: string): Promise<void> {
   if (!service) throw new Error("Messaging is offline — try again in a moment.");
-  await service.sendText(peerUserId, text);
+  await service.sendText(peerUserId, text, messageId);
+}
+
+export async function sendReadReceipt(peerUserId: string, remoteIds: string[]): Promise<void> {
+  if (!service || remoteIds.length === 0) return;
+  await service.sendReceipt(peerUserId, "read", remoteIds).catch(() => {});
 }
 
 /** Resolve a public @username to an account, for starting a conversation. */

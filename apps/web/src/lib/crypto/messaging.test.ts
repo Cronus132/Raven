@@ -7,6 +7,7 @@ import {
   MessagingService,
   type BundleSource,
   type InboundMessage,
+  type Receipt,
 } from "./messaging";
 import { InMemoryMessageBus } from "@/lib/transport/transport";
 
@@ -149,6 +150,27 @@ describe("MessagingService transport", () => {
     await waitFor(() => bobInbox.length === 2);
     expect(bobInbox.map((m) => m.text)).toEqual(["before reload", "after reload"]);
 
+    bob.stop();
+  });
+});
+
+describe("receipts", () => {
+  it("acknowledges delivery automatically and read on request", async () => {
+    const { alice, bob, bobInbox } = setup();
+    const aliceReceipts: Receipt[] = [];
+    alice.onReceipt = (r) => aliceReceipts.push(r);
+    await alice.start();
+    await bob.start();
+
+    await alice.sendText("bob", "ping", "msg-1");
+    await waitFor(() => bobInbox.length === 1);
+    // Bob's device auto-acks delivery.
+    await waitFor(() => aliceReceipts.some((r) => r.kind === "delivered" && r.ids.includes("msg-1")));
+    // Bob reads the conversation.
+    await bob.sendReceipt("alice", "read", ["msg-1"]);
+    await waitFor(() => aliceReceipts.some((r) => r.kind === "read" && r.ids.includes("msg-1")));
+
+    alice.stop();
     bob.stop();
   });
 });

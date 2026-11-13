@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { useChatStore } from "@/store/useChatStore";
+import { sendReadReceipt } from "@/lib/chat/liveMessaging";
 import { ChatHeader } from "./ChatHeader";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
@@ -9,6 +11,14 @@ export function ChatPane() {
   // Subscribe to the active conversation object directly so draft/typing/unread
   // updates re-render this subtree (selecting a store *function* would not).
   const conv = useChatStore((s) => s.conversations.find((c) => c.id === s.activeId));
+  const messageCount = useChatStore((s) => s.messages.length);
+
+  // When a live conversation is open, tell the peer we've read their messages.
+  useEffect(() => {
+    if (!conv?.real || !conv.peerUserId) return;
+    const ids = useChatStore.getState().inboundRemoteIds(conv.id);
+    if (ids.length) void sendReadReceipt(conv.peerUserId, ids);
+  }, [conv?.id, conv?.real, conv?.peerUserId, messageCount]);
 
   if (!conv) return <EmptyState />;
 

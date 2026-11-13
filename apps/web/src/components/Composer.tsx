@@ -34,7 +34,7 @@ export function Composer({ conv }: { conv: Conversation }) {
     if (conv.real && conv.peerUserId) {
       // Real E2E send: optimistic bubble, then encrypt + relay.
       const id = appendOutgoing(conv.id, text);
-      void sendLive(conv.peerUserId, text)
+      void sendLive(conv.peerUserId, text, id)
         .then(() => setMessageStatus(id, "sent"))
         .catch(() => setMessageStatus(id, "failed"));
     } else {

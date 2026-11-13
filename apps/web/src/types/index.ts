@@ -49,6 +49,8 @@ export interface Message {
   reactions?: Reaction[];
   replyToId?: string;
   editedAt?: number;
+  // the sender's message id for an inbound live message (used to send read receipts)
+  remoteId?: string;
   // disappearing-message TTL in seconds, enforced on the client
   expiresInSeconds?: number;
 }

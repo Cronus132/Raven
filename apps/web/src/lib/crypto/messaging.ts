@@ -35,13 +35,10 @@ export interface BundleSource {
   deviceList(userId: string): Promise<{ userId: string; deviceIds: string[] } | undefined>;
 }
 
-/** The decrypted message payload the ratchet protects. */
-interface Payload {
-  v: 1;
-  from: string; // sender account id
-  to: string; // recipient account id (the conversation's other party)
-  body: string;
-}
+/** The decrypted payloads the ratchet protects. */
+type TextPayload = { v: 1; t: "text"; from: string; to: string; id: string; body: string };
+type ReceiptPayload = { v: 1; t: "receipt"; from: string; to: string; kind: "delivered" | "read"; ids: string[] };
+type Payload = TextPayload | ReceiptPayload;
 
 function encodePayload(p: Payload): Uint8Array {
   return utf8(JSON.stringify(p));
@@ -80,8 +77,15 @@ export interface InboundMessage {
   from: string;
   fromDevice: string;
   text: string;
+  /** The sender's message id (for read receipts). */
+  id: string;
   /** True when this is one of our own messages, synced from another of our devices. */
   outgoing: boolean;
+}
+
+export interface Receipt {
+  ids: string[];
+  kind: "delivered" | "read";
 }
 
 interface Target {
@@ -91,6 +95,7 @@ interface Target {
 
 export class MessagingService {
   onMessage?: (msg: InboundMessage) => void;
+  onReceipt?: (receipt: Receipt) => void;
   private unsubscribe?: () => void;
 
   constructor(
@@ -114,9 +119,19 @@ export class MessagingService {
   }
 
   /** Encrypt and fan a text message out to every recipient device and our own other devices. */
-  async sendText(peerUserId: string, text: string): Promise<void> {
-    const plaintext = encodePayload({ v: 1, from: this.selfUserId, to: peerUserId, body: text });
-    const targets = await this.fanoutTargets(peerUserId);
+  async sendText(peerUserId: string, text: string, messageId: string = crypto.randomUUID()): Promise<void> {
+    const plaintext = encodePayload({ v: 1, t: "text", from: this.selfUserId, to: peerUserId, id: messageId, body: text });
+    await this.deliver(await this.fanoutTargets(peerUserId), plaintext);
+  }
+
+  /** Send a delivery/read receipt to the peer's devices. */
+  async sendReceipt(toUserId: string, kind: "delivered" | "read", ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    const plaintext = encodePayload({ v: 1, t: "receipt", from: this.selfUserId, to: toUserId, kind, ids });
+    await this.deliver(await this.peerDevices(toUserId), plaintext);
+  }
+
+  private async deliver(targets: Target[], plaintext: Uint8Array): Promise<void> {
     for (const target of targets) {
       let rec: SessionRecord;
       try {
@@ -134,6 +149,14 @@ export class MessagingService {
         ciphertext: serializeMessage(msg),
       });
     }
+  }
+
+  /** Just the devices of one user (excluding our own device), for receipts. */
+  private async peerDevices(userId: string): Promise<Target[]> {
+    const list = await this.directory.deviceList(userId);
+    return (list?.deviceIds ?? [])
+      .filter((d) => !(userId === this.selfUserId && d === this.self.deviceId))
+      .map((deviceId) => ({ userId, deviceId }));
   }
 
   /** Every recipient device, plus our own other devices (for sync). */
@@ -177,8 +200,15 @@ export class MessagingService {
     await this.transport.ack([env.id]);
 
     const payload = decodePayload(plaintext);
+    if (payload.t === "receipt") {
+      this.onReceipt?.({ ids: payload.ids, kind: payload.kind });
+      return;
+    }
+
     const outgoing = payload.from === this.selfUserId; // a sync copy of our own message
     const conversationPeer = outgoing ? payload.to : payload.from;
-    this.onMessage?.({ from: conversationPeer, fromDevice: senderDevice, text: payload.body, outgoing });
+    this.onMessage?.({ from: conversationPeer, fromDevice: senderDevice, text: payload.body, outgoing, id: payload.id });
+    // Acknowledge delivery back to the sender (not for our own synced copies).
+    if (!outgoing) void this.sendReceipt(payload.from, "delivered", [payload.id]).catch(() => {});
   }
 }
