@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useChatStore } from "@/store/useChatStore";
-import { sendReadReceipt } from "@/lib/chat/liveMessaging";
+import { checkPeerKey, sendReadReceipt } from "@/lib/chat/liveMessaging";
 import { ChatHeader } from "./ChatHeader";
 import { MessageList } from "./MessageList";
 import { Composer } from "./Composer";
@@ -19,6 +19,11 @@ export function ChatPane() {
     const ids = useChatStore.getState().inboundRemoteIds(conv.id);
     if (ids.length) void sendReadReceipt(conv.peerUserId, ids);
   }, [conv?.id, conv?.real, conv?.peerUserId, messageCount]);
+
+  // Check the peer's identity key for changes when the conversation opens.
+  useEffect(() => {
+    if (conv?.real && conv.peerUserId) void checkPeerKey(conv.peerUserId);
+  }, [conv?.id, conv?.real, conv?.peerUserId]);
 
   if (!conv) return <EmptyState />;
 

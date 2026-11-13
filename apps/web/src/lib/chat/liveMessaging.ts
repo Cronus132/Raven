@@ -16,7 +16,8 @@ import type { DeviceSecret } from "@/lib/crypto/identity";
 import type { AccountMeta } from "@/lib/crypto/keystore";
 import { KeystoreSessionStore } from "@/lib/crypto/keystoreSessionStore";
 import { SupabaseTransport } from "@/lib/transport/supabaseTransport";
-import { hkdfSha256, utf8 } from "@/lib/crypto/primitives";
+import { hkdfSha256, toBase64, utf8 } from "@/lib/crypto/primitives";
+import { recordAndCheck } from "@/lib/crypto/keyChange";
 import { startPresence, stopPresence } from "./livePresence";
 import { useChatStore } from "@/store/useChatStore";
 
@@ -121,4 +122,17 @@ export async function sendMediaLive(
 export async function lookupUser(username: string): Promise<{ userId: string; username: string } | undefined> {
   if (!directoryRef?.findUserByUsername) return undefined;
   return directoryRef.findUserByUsername(username);
+}
+
+/** Check whether a contact's identity key changed since last seen; flag trust if so. */
+export async function checkPeerKey(peerUserId: string): Promise<void> {
+  if (!directoryRef?.identityKeyOf) return;
+  try {
+    const key = await directoryRef.identityKeyOf(peerUserId);
+    if (!key) return;
+    const state = recordAndCheck(peerUserId, toBase64(key));
+    if (state === "changed") useChatStore.getState().setConversationTrust(`d_${peerUserId}`, "changed");
+  } catch {
+    /* directory unavailable */
+  }
 }

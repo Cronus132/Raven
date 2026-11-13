@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Attachment, Conversation, Message, MessageStatus, User } from "@/types";
+import type { Attachment, Conversation, Message, MessageStatus, TrustLevel, User } from "@/types";
 import { CONVERSATIONS, MESSAGES, USERS, ME } from "@/data/seed";
 
 type Filter = "all" | "unread" | "groups";
@@ -48,6 +48,7 @@ interface ChatState {
   inboundRemoteIds: (conversationId: string) => string[];
   setOnlineUsers: (userIds: string[]) => void;
   setPeerTyping: (peerUserId: string, typing: boolean) => void;
+  setConversationTrust: (conversationId: string, trust: TrustLevel) => void;
 }
 
 const isUuidId = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
@@ -250,6 +251,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conversations: s.conversations.map((c) =>
         c.id === `d_${peerUserId}` ? { ...c, typingUserIds: typing ? [peerUserId] : [] } : c,
       ),
+    })),
+
+  setConversationTrust: (conversationId, trust) =>
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === conversationId ? { ...c, trust } : c)),
     })),
 
   receiveLiveMessage: ({ peerUserId, username, text, outgoing, remoteId, attachment }) => {
