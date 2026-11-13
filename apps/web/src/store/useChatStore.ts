@@ -46,6 +46,15 @@ interface ChatState {
     attachment?: Attachment;
   }) => void;
   inboundRemoteIds: (conversationId: string) => string[];
+  startGroupConversation: (g: { groupId: string; name: string; members: { userId: string; username: string }[] }) => string;
+  receiveGroupMessage: (m: {
+    groupId: string;
+    name: string;
+    from: string;
+    username: string;
+    text: string;
+    outgoing?: boolean;
+  }) => void;
   setOnlineUsers: (userIds: string[]) => void;
   setPeerTyping: (peerUserId: string, typing: boolean) => void;
   setConversationTrust: (conversationId: string, trust: TrustLevel) => void;
@@ -95,6 +104,45 @@ function ensureLivePeer(
           typingUserIds: [],
           real: true,
           peerUserId,
+        },
+        ...s.conversations,
+      ];
+  return { users, conversations, convId };
+}
+
+/** Ensure a group conversation (and any named members) exist; returns its id. */
+function ensureLiveGroup(
+  s: ChatState,
+  groupId: string,
+  name: string,
+  memberEntries: { userId: string; username: string }[] = [],
+): { users: Record<string, User>; conversations: Conversation[]; convId: string } {
+  const convId = `g_${groupId}`;
+  const hue = hueFromId(groupId);
+  let users = s.users;
+  for (const m of memberEntries) {
+    if (m.userId === "me" || users[m.userId]) continue;
+    users = {
+      ...users,
+      [m.userId]: { id: m.userId, name: m.username, handle: `@${m.username}`, avatarHue: hueFromId(m.userId), presence: "offline" },
+    };
+  }
+  const memberIds = ["me", ...memberEntries.map((m) => m.userId)];
+  const conversations = s.conversations.some((c) => c.id === convId)
+    ? s.conversations
+    : [
+        {
+          id: convId,
+          kind: "group" as const,
+          title: name,
+          memberIds,
+          avatarHue: hue,
+          trust: "unverified" as const,
+          unreadCount: 0,
+          lastReadAt: 0,
+          typingUserIds: [],
+          real: true,
+          groupId,
         },
         ...s.conversations,
       ];
@@ -229,6 +277,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
     get()
       .messages.filter((m) => m.conversationId === conversationId && m.senderId !== "me" && m.remoteId)
       .map((m) => m.remoteId as string),
+
+  startGroupConversation: ({ groupId, name, members }) => {
+    const { users, conversations, convId } = ensureLiveGroup(get(), groupId, name, members);
+    set({ users, conversations, activeId: convId, replyTo: null });
+    get().markRead(convId);
+    return convId;
+  },
+
+  receiveGroupMessage: ({ groupId, name, from, username, text, outgoing }) => {
+    set((s) => {
+      const { users, conversations, convId } = ensureLiveGroup(s, groupId, name, [{ userId: from, username }]);
+      const m: Message = {
+        id: nextId("m"),
+        conversationId: convId,
+        senderId: outgoing ? "me" : from,
+        kind: "text",
+        body: text,
+        createdAt: Date.now(),
+        status: outgoing ? "sent" : "read",
+      };
+      const bump = !outgoing && s.activeId !== convId;
+      return {
+        users,
+        messages: [...s.messages, m],
+        conversations: conversations.map((c) =>
+          c.id === convId ? { ...c, unreadCount: bump ? c.unreadCount + 1 : c.unreadCount } : c,
+        ),
+      };
+    });
+  },
 
   setOnlineUsers: (userIds) =>
     set((s) => {

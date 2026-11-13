@@ -22,6 +22,8 @@ import {
   startResponderSession,
   type DirectSession,
 } from "./session";
+import { GroupService, type GroupCiphertext, type SenderKeyDistribution } from "./group";
+import { fromBase64, toBase64 } from "./primitives";
 import type { QueuedEnvelope, Transport } from "@/lib/transport/transport";
 
 const utf8 = (s: string) => new TextEncoder().encode(s);
@@ -50,13 +52,35 @@ export interface MediaRef {
 type TextPayload = { v: 1; t: "text"; from: string; to: string; id: string; body: string };
 type ReceiptPayload = { v: 1; t: "receipt"; from: string; to: string; kind: "delivered" | "read"; ids: string[] };
 type MediaPayload = { v: 1; t: "media"; from: string; to: string; id: string; caption?: string; media: MediaRef };
-type Payload = TextPayload | ReceiptPayload | MediaPayload;
+type SkdmPayload = { v: 1; t: "skdm"; from: string; to: string; dist: SenderKeyDistribution };
+type Payload = TextPayload | ReceiptPayload | MediaPayload | SkdmPayload;
 
 function encodePayload(p: Payload): Uint8Array {
   return utf8(JSON.stringify(p));
 }
 function decodePayload(b: Uint8Array): Payload {
   return JSON.parse(fromUtf8(b)) as Payload;
+}
+
+// Group ciphertext travels as its own tagged wire blob (not a pairwise ratchet message).
+interface GroupWire {
+  k: "group";
+  groupId: string;
+  sender: string;
+  iteration: number;
+  body: string; // base64
+}
+function serializeGroupCiphertext(gc: GroupCiphertext): string {
+  const wire: GroupWire = { k: "group", groupId: gc.groupId, sender: gc.sender, iteration: gc.iteration, body: toBase64(gc.body) };
+  return toBase64(utf8(JSON.stringify(wire)));
+}
+function tryParseGroupWire(blob: string): GroupWire | null {
+  try {
+    const o = JSON.parse(fromUtf8(fromBase64(blob)));
+    return o && o.k === "group" ? (o as GroupWire) : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface SessionRecord {
@@ -102,6 +126,16 @@ export interface Receipt {
   kind: "delivered" | "read";
 }
 
+export interface InboundGroupMessage {
+  groupId: string;
+  name: string;
+  members: string[];
+  from: string;
+  text: string;
+  id: string;
+  outgoing: boolean;
+}
+
 interface Target {
   userId: string;
   deviceId: string;
@@ -110,7 +144,12 @@ interface Target {
 export class MessagingService {
   onMessage?: (msg: InboundMessage) => void;
   onReceipt?: (receipt: Receipt) => void;
+  onGroupMessage?: (msg: InboundGroupMessage) => void;
   private unsubscribe?: () => void;
+
+  private readonly group: GroupService;
+  private readonly distributedTo = new Map<string, Set<string>>(); // groupId -> users we've sent our key to
+  private readonly pendingGroup = new Map<string, GroupCiphertext[]>(); // `${groupId}/${sender}` -> queued
 
   constructor(
     private readonly self: DeviceSecret,
@@ -118,13 +157,21 @@ export class MessagingService {
     private readonly directory: BundleSource,
     private readonly transport: Transport,
     private readonly sessions: SessionStore = new InMemorySessionStore(),
-  ) {}
+  ) {
+    this.group = new GroupService(selfUserId);
+  }
 
   /** Drain the offline queue, then subscribe for realtime delivery. */
   async start(): Promise<void> {
     const queued = await this.transport.fetchQueued();
-    for (const env of queued) await this.handle(env);
-    this.unsubscribe = this.transport.subscribe((env) => void this.handle(env));
+    for (const env of queued) {
+      try {
+        await this.handle(env);
+      } catch {
+        /* a single bad envelope must not stop the drain */
+      }
+    }
+    this.unsubscribe = this.transport.subscribe((env) => void this.handle(env).catch(() => {}));
   }
 
   stop(): void {
@@ -204,7 +251,108 @@ export class MessagingService {
     return { peerUserId: userId, peerDevice: bundle.deviceId, session: startInitiatorSession(this.self, bundle) };
   }
 
+  // ---- groups (Sender Keys) -------------------------------------------------
+
+  /** Create a group and distribute our sender key to the members. */
+  async createGroup(groupId: string, name: string, memberUserIds: string[]): Promise<void> {
+    const members = Array.from(new Set([...memberUserIds, this.selfUserId]));
+    this.group.ensureGroup(groupId, name, members);
+    await this.distributeKey(groupId, members);
+  }
+
+  groupMembers(groupId: string): string[] {
+    return this.group.has(groupId) ? this.group.members(groupId) : [];
+  }
+
+  /** Encrypt a group message once and fan the ciphertext out to all member devices. */
+  async sendGroupText(groupId: string, text: string, messageId: string): Promise<void> {
+    await this.distributeKey(groupId, this.group.members(groupId));
+    const plaintext = utf8(JSON.stringify({ id: messageId, body: text }));
+    const gc = await this.group.encrypt(groupId, plaintext);
+    const wire = serializeGroupCiphertext(gc);
+    for (const target of await this.groupTargets(groupId)) {
+      await this.transport.send({
+        senderUser: this.selfUserId,
+        senderDevice: this.self.deviceId,
+        recipientUser: target.userId,
+        recipientDevice: target.deviceId,
+        ciphertext: wire,
+      });
+    }
+  }
+
+  /** Send our sender key (1:1, over the pairwise ratchet) to members who lack it. */
+  private async distributeKey(groupId: string, toUserIds: string[]): Promise<void> {
+    const dist = this.group.distribution(groupId);
+    const sent = this.distributedTo.get(groupId) ?? new Set<string>();
+    for (const user of toUserIds) {
+      if (sent.has(user)) continue;
+      const plaintext = encodePayload({ v: 1, t: "skdm", from: this.selfUserId, to: user, dist });
+      await this.deliver(await this.peerDevices(user), plaintext);
+      sent.add(user);
+    }
+    this.distributedTo.set(groupId, sent);
+  }
+
+  private async groupTargets(groupId: string): Promise<Target[]> {
+    const out: Target[] = [];
+    for (const member of this.group.members(groupId)) {
+      const list = await this.directory.deviceList(member);
+      for (const d of list?.deviceIds ?? []) {
+        if (member === this.selfUserId && d === this.self.deviceId) continue;
+        out.push({ userId: member, deviceId: d });
+      }
+    }
+    return out;
+  }
+
+  private async handleGroup(gw: GroupWire): Promise<void> {
+    const gc: GroupCiphertext = { groupId: gw.groupId, sender: gw.sender, iteration: gw.iteration, body: fromBase64(gw.body) };
+    if (!this.group.hasSender(gc.groupId, gc.sender)) {
+      // sender key not yet known (its skdm hasn't arrived) — queue and retry on arrival
+      const key = `${gc.groupId}/${gc.sender}`;
+      const q = this.pendingGroup.get(key) ?? [];
+      q.push(gc);
+      this.pendingGroup.set(key, q);
+      return;
+    }
+    await this.deliverGroup(gc);
+  }
+
+  private async deliverGroup(gc: GroupCiphertext): Promise<void> {
+    try {
+      const pt = await this.group.decrypt(gc.groupId, gc.sender, gc.iteration, gc.body);
+      const { id, body } = JSON.parse(fromUtf8(pt)) as { id: string; body: string };
+      this.onGroupMessage?.({
+        groupId: gc.groupId,
+        name: this.group.name(gc.groupId),
+        members: this.group.members(gc.groupId),
+        from: gc.sender,
+        text: body,
+        id,
+        outgoing: gc.sender === this.selfUserId,
+      });
+    } catch {
+      /* undecryptable (missing/duplicate) — dropped */
+    }
+  }
+
+  private flushPending(groupId: string, sender: string): void {
+    const key = `${groupId}/${sender}`;
+    const q = this.pendingGroup.get(key);
+    if (!q) return;
+    this.pendingGroup.delete(key);
+    for (const gc of q) void this.deliverGroup(gc);
+  }
+
   private async handle(env: QueuedEnvelope): Promise<void> {
+    const groupWire = tryParseGroupWire(env.ciphertext);
+    if (groupWire) {
+      await this.transport.ack([env.id]);
+      await this.handleGroup(groupWire);
+      return;
+    }
+
     const msg = deserializeMessage(env.ciphertext);
     const senderUser = env.senderUser;
     const senderDevice = env.senderDevice;
@@ -222,6 +370,13 @@ export class MessagingService {
     const payload = decodePayload(plaintext);
     if (payload.t === "receipt") {
       this.onReceipt?.({ ids: payload.ids, kind: payload.kind });
+      return;
+    }
+    if (payload.t === "skdm") {
+      this.group.applyDistribution(payload.dist, payload.from);
+      this.flushPending(payload.dist.groupId, payload.from);
+      // reciprocate so the sender (and any new members) can read our messages
+      void this.distributeKey(payload.dist.groupId, payload.dist.members).catch(() => {});
       return;
     }
 

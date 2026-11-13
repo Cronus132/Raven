@@ -78,6 +78,23 @@ export async function startMessaging(
     for (const id of r.ids) setStatus(id, r.kind);
   };
 
+  svc.onGroupMessage = async (m) => {
+    let username = `user-${m.from.slice(0, 6)}`;
+    try {
+      username = (await directory.usernameOf?.(m.from)) ?? username;
+    } catch {
+      /* label fallback */
+    }
+    useChatStore.getState().receiveGroupMessage({
+      groupId: m.groupId,
+      name: m.name,
+      from: m.from,
+      username,
+      text: m.text,
+      outgoing: m.outgoing,
+    });
+  };
+
   // Realtime postgres_changes enforces RLS via the socket's auth token.
   try {
     const { data } = await supabase.auth.getSession();
@@ -116,6 +133,19 @@ export async function sendMediaLive(
 ): Promise<void> {
   if (!service) throw new Error("Messaging is offline — try again in a moment.");
   await service.sendMedia(peerUserId, media, messageId, caption);
+}
+
+/** Create a group with resolved member user ids; returns the new group id. */
+export async function createGroupLive(name: string, memberUserIds: string[]): Promise<string> {
+  if (!service) throw new Error("Messaging is offline — try again in a moment.");
+  const groupId = crypto.randomUUID();
+  await service.createGroup(groupId, name, memberUserIds);
+  return groupId;
+}
+
+export async function sendGroupLive(groupId: string, text: string, messageId: string): Promise<void> {
+  if (!service) throw new Error("Messaging is offline — try again in a moment.");
+  await service.sendGroupText(groupId, text, messageId);
 }
 
 /** Resolve a public @username to an account, for starting a conversation. */

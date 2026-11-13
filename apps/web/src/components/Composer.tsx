@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Plus, Smile, Mic, SendHorizontal, Lock, X } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
-import { sendLive, sendMediaLive } from "@/lib/chat/liveMessaging";
+import { sendGroupLive, sendLive, sendMediaLive } from "@/lib/chat/liveMessaging";
 import { sendTyping } from "@/lib/chat/livePresence";
 import { uploadAttachment } from "@/lib/chat/media";
 import { cn } from "@/lib/utils";
@@ -56,8 +56,14 @@ export function Composer({ conv }: { conv: Conversation }) {
     const text = draft.trim();
     if (!text) return;
     stopTyping();
-    if (conv.real && conv.peerUserId) {
-      // Real E2E send: optimistic bubble, then encrypt + relay.
+    if (conv.groupId) {
+      // Group E2E send (sender keys).
+      const id = appendOutgoing(conv.id, text);
+      void sendGroupLive(conv.groupId, text, id)
+        .then(() => setMessageStatus(id, "sent"))
+        .catch(() => setMessageStatus(id, "failed"));
+    } else if (conv.real && conv.peerUserId) {
+      // Real 1:1 E2E send: optimistic bubble, then encrypt + relay.
       const id = appendOutgoing(conv.id, text);
       void sendLive(conv.peerUserId, text, id)
         .then(() => setMessageStatus(id, "sent"))
@@ -129,8 +135,8 @@ export function Composer({ conv }: { conv: Conversation }) {
         <button
           type="button"
           onClick={() => fileRef.current?.click()}
-          disabled={!conv.real}
-          title={conv.real ? "Attach an encrypted file" : "Attachments are available in live chats"}
+          disabled={!conv.peerUserId}
+          title={conv.peerUserId ? "Attach an encrypted file" : "Attachments are available in 1:1 chats"}
           className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--color-ink-dim)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-ink)] disabled:opacity-40"
         >
           <Plus className="h-5 w-5" />

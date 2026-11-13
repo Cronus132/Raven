@@ -6,6 +6,7 @@ import {
   InMemorySessionStore,
   MessagingService,
   type BundleSource,
+  type InboundGroupMessage,
   type InboundMessage,
   type Receipt,
 } from "./messaging";
@@ -172,6 +173,46 @@ describe("receipts", () => {
 
     alice.stop();
     bob.stop();
+  });
+});
+
+describe("group messaging over transport", () => {
+  it("delivers a group message to every member and supports replies", async () => {
+    const bus = new InMemoryMessageBus();
+    const dir = new InMemoryDirectory();
+    const users = ["A", "B", "C"] as const;
+    const secrets = Object.fromEntries(users.map((u) => [u, createDeviceSecret(20)]));
+    for (const u of users) dir.publish(u, secrets[u]);
+
+    const svc: Record<string, MessagingService> = {};
+    const inbox: Record<string, InboundGroupMessage[]> = {};
+    for (const u of users) {
+      const m = new MessagingService(secrets[u], u, dir, bus.forDevice(u, secrets[u].deviceId));
+      inbox[u] = [];
+      m.onGroupMessage = (x) => inbox[u].push(x);
+      svc[u] = m;
+      await m.start();
+    }
+
+    // Pre-establish pairwise sessions (as real users who have chatted before),
+    // so group key distribution doesn't hit simultaneous session initiation.
+    await svc.A.sendText("B", "hi", "pre1");
+    await svc.A.sendText("C", "hi", "pre2");
+    await svc.B.sendText("C", "hi", "pre3");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const gid = "grp-1";
+    await svc.A.createGroup(gid, "Team", ["B", "C"]);
+    await svc.A.sendGroupText(gid, "hello team", "m1");
+    await waitFor(() => inbox.B.length >= 1 && inbox.C.length >= 1, 2000);
+    expect(inbox.B[0]).toMatchObject({ groupId: gid, from: "A", text: "hello team", outgoing: false });
+    expect(inbox.C[0].text).toBe("hello team");
+
+    // B replies; A and C receive it.
+    await svc.B.sendGroupText(gid, "hey all", "m2");
+    await waitFor(() => inbox.A.some((x) => x.text === "hey all") && inbox.C.some((x) => x.text === "hey all"), 2000);
+
+    for (const u of users) svc[u].stop();
   });
 });
 

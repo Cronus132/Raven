@@ -58,6 +58,11 @@ export class GroupService {
     return this.groups.has(groupId);
   }
 
+  /** Whether we hold a sender key (receiving chain) for `userId` in this group. */
+  hasSender(groupId: string, userId: string): boolean {
+    return this.groups.get(groupId)?.receiving.has(userId) ?? false;
+  }
+
   /** Create or update a group, generating our own sending key if new. */
   ensureGroup(groupId: string, name: string, members: string[]): void {
     const existing = this.groups.get(groupId);

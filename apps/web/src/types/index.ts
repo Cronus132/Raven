@@ -84,4 +84,6 @@ export interface Conversation {
   // conversations leave this unset and use the simulated send path.
   real?: boolean;
   peerUserId?: string;
+  // live group: the group id (Sender Keys). Set for real group conversations.
+  groupId?: string;
 }
