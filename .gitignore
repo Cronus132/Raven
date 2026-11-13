@@ -6,11 +6,18 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
+# app build outputs (regenerated from apps/web)
+apps/mobile/www/
+apps/desktop/renderer/
+apps/desktop/release/
 
 # env / secrets
 .env
 .env.*
 !.env.example
+# .env.production holds only PUBLIC client config (Supabase URL + publishable key);
+# the anon/publishable key is meant to ship in clients and RLS protects the data.
+!.env.production
 
 # editor / os
 .DS_Store

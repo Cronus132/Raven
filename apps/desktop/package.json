@@ -1,0 +1,48 @@
+{
+  "name": "raven-desktop",
+  "version": "0.1.0",
+  "description": "Raven — end-to-end encrypted messenger (desktop)",
+  "author": "Mehrose",
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "build:web": "cross-env BUILD_TARGET=app VITE_BASE=./ node ../../node_modules/vite/bin/vite.js build ../web --outDir ../desktop/renderer --emptyOutDir",
+    "pack": "npm run build:web && electron-builder --dir",
+    "dist": "npm run build:web && electron-builder"
+  },
+  "devDependencies": {
+    "cross-env": "7.0.3",
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "app.raven.messenger",
+    "productName": "Raven",
+    "copyright": "Copyright © 2026 Mehrose",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": ["main.js", "renderer/**/*"],
+    "win": {
+      "target": ["nsis"],
+      "artifactName": "Raven-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Network",
+      "artifactName": "Raven-${version}.${ext}"
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.social-networking",
+      "artifactName": "Raven-${version}.${ext}"
+    }
+  }
+}
