@@ -20,6 +20,19 @@ export interface DirectoryDeviceList {
 
 export interface KeyDirectory {
   publish(bundle: PreKeyBundle): Promise<void>;
+  /** Publish a device's libsignal public bundle (identity + signed prekey + one-time prekeys). */
+  publishSignalBundle?(
+    bundle: {
+      registrationId: number;
+      identityKey: string;
+      signedPreKeyId: number;
+      signedPreKey: string;
+      signedPreKeySignature: string;
+      oneTimePreKeys: { keyId: number; publicKey: string }[];
+    },
+    userId: string,
+    deviceId: string,
+  ): Promise<void>;
   /**
    * Publish a device's full public key set (identity + signed prekey + every
    * one-time prekey). Backends that can store a prekey pool implement this; the

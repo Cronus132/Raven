@@ -1,17 +1,25 @@
 import { create } from "zustand";
-import { computeSafetyNumber, createDeviceSecret, publicBundle, shortFingerprint, type DeviceSecret } from "@/lib/crypto/identity";
+import { shortFingerprint } from "@/lib/crypto/identity";
 import { LocalKeyDirectory, type KeyDirectory } from "@/lib/crypto/directory";
 import { SupabaseKeyDirectory } from "@/lib/crypto/supabaseDirectory";
+import {
+  createSignalDevice,
+  signalSafetyNumber,
+  type SignalPublicBundle,
+} from "@/lib/crypto/signal/signalDevice";
+import { SignalStore } from "@/lib/crypto/signal/signalStore";
+import { SignalSessionEngine } from "@/lib/crypto/sessionEngine";
 import {
   type AccountMeta,
   hasStoredIdentity,
   loadMeta,
+  resealIdentity,
   saveIdentity,
   UnlockError,
   unlockIdentity,
   wipeIdentity,
 } from "@/lib/crypto/keystore";
-import { toBase64 } from "@/lib/crypto/primitives";
+import { fromBase64, toBase64 } from "@/lib/crypto/primitives";
 import {
   enrollPasskey as enrollPasskeyWebAuthn,
   hasPasskey as hasPasskeyStored,
@@ -26,40 +34,54 @@ import { useChatStore } from "./useChatStore";
 
 type Status = "loading" | "none" | "locked" | "unlocked";
 
-// The key directory the client talks to: Supabase when configured, otherwise a
-// local in-memory directory so the app still runs fully offline.
+/** This device's libsignal identity: the store (keys + sessions), its public bundle, and id. */
+interface Device {
+  store: SignalStore;
+  bundle: SignalPublicBundle;
+  deviceId: string;
+}
+
 const demoIds = Object.keys(USERS).filter((id) => id !== "me");
 const directory: KeyDirectory = isSupabaseConfigured
   ? new SupabaseKeyDirectory(demoIds)
   : new LocalKeyDirectory(demoIds);
 
-/** Publish this device's public keys, preferring the full-set path when available. */
-async function publishDevice(secret: DeviceSecret, userId: string): Promise<void> {
-  if (directory.publishKeys) await directory.publishKeys(secret, userId);
-  else await directory.publish(publicBundle(secret, userId));
+function serializeDevice(d: Device): string {
+  return JSON.stringify({ store: d.store.serialize(), bundle: d.bundle, deviceId: d.deviceId });
+}
+function deserializeDevice(s: string): Device {
+  const o = JSON.parse(s) as { store: string; bundle: SignalPublicBundle; deviceId: string };
+  return { store: SignalStore.deserialize(o.store), bundle: o.bundle, deviceId: o.deviceId };
 }
 
-/** Turn a raw auth error into something a person can act on. */
+/** Build the session engine, persisting the store (cheaply) whenever it changes. */
+function buildEngine(device: Device, wrappingKey: Uint8Array): SignalSessionEngine {
+  const persist = () => void resealIdentity(serializeDevice(device), wrappingKey).catch(() => {});
+  return new SignalSessionEngine(device.store, device.deviceId, device.bundle.identityKey, persist);
+}
+
+async function publishDevice(bundle: SignalPublicBundle, userId: string, deviceId: string): Promise<void> {
+  await directory.publishSignalBundle?.(bundle, userId, deviceId);
+}
+
 function mapAuthError(msg: string): string {
   const m = msg.toLowerCase();
   if (m.includes("already registered") || m.includes("already been registered"))
     return "That email already has an account — unlock it, or use another email.";
-  if (m.includes("database error"))
-    return "Couldn't create the account (that username may be taken). Try a different username.";
-  if (m.includes("password"))
-    return "The server rejected that passphrase. Use a longer one.";
+  if (m.includes("database error")) return "Couldn't create the account (that username may be taken). Try a different username.";
+  if (m.includes("password")) return "The server rejected that passphrase. Use a longer one.";
   return msg;
 }
 
 interface IdentityState {
   status: Status;
   meta: AccountMeta | null;
-  secret: DeviceSecret | null;
-  passphrase: string | null; // in-memory only, held while unlocked to re-seal prekeys
+  device: Device | null;
+  passphrase: string | null;
   error: string | null;
   busy: boolean;
-  passkeySupported: boolean; // this device can do platform passkeys
-  hasPasskey: boolean; // a passkey is enrolled on this device
+  passkeySupported: boolean;
+  hasPasskey: boolean;
 
   init: () => Promise<void>;
   register: (input: { username: string; email: string; passphrase: string }) => Promise<void>;
@@ -86,7 +108,7 @@ function syncMe(meta: AccountMeta) {
 export const useIdentityStore = create<IdentityState>((set, get) => ({
   status: "loading",
   meta: null,
-  secret: null,
+  device: null,
   passphrase: null,
   error: null,
   busy: false,
@@ -97,8 +119,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     const [supported, hasPk] = await Promise.all([passkeysAvailable(), hasPasskeyStored()]);
     set({ passkeySupported: supported, hasPasskey: hasPk });
     if (await hasStoredIdentity()) {
-      const meta = (await loadMeta()) ?? null;
-      set({ status: "locked", meta });
+      set({ status: "locked", meta: (await loadMeta()) ?? null });
     } else {
       set({ status: "none" });
     }
@@ -108,52 +129,42 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     set({ busy: true, error: null });
     try {
       let userId: string;
-
       if (isSupabaseConfigured && supabase) {
-        // Account credentials: email + a slow one-way derivation of the passphrase.
         const password = deriveAuthPassword(email, passphrase);
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: { data: { username } },
-        });
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { username } } });
         if (error) throw new Error(mapAuthError(error.message));
         const uid = data.user?.id;
         if (!uid) throw new Error("Sign-up did not return an account.");
         if (!data.session) {
-          // Email confirmation is on: no session yet, so keys can't be published.
           set({ busy: false, error: "Check your email to confirm your account, then unlock." });
           return;
         }
-        userId = uid; // account uid == directory user id
+        userId = uid;
       } else {
         userId = `usr_${crypto.randomUUID().slice(0, 12)}`;
       }
 
-      // Key generation can briefly block; yield a frame so the UI can paint.
       await new Promise((r) => setTimeout(r, 10));
-      const secret = createDeviceSecret();
+      const dev = await createSignalDevice();
+      const device: Device = { store: dev.store, bundle: dev.bundle, deviceId: `sdev_${crypto.randomUUID().slice(0, 8)}` };
       const meta: AccountMeta = {
         userId,
         username,
         email,
-        deviceId: secret.deviceId,
-        identityKey: toBase64(secret.identityEd.pub),
+        deviceId: device.deviceId,
+        identityKey: device.bundle.identityKey,
         createdAt: Date.now(),
       };
-      const wrappingKey = await saveIdentity(secret, meta, passphrase);
-      await publishDevice(secret, userId);
+      const wrappingKey = await saveIdentity(serializeDevice(device), meta, passphrase);
+      await publishDevice(device.bundle, userId, device.deviceId);
       syncMe(meta);
-      set({ status: "unlocked", secret, meta, passphrase, busy: false });
-      // Supabase sign-up already has a session, so start live messaging now.
-      void startMessaging(secret, meta, wrappingKey, directory).catch(() => {});
+      set({ status: "unlocked", device, meta, passphrase, busy: false });
+      void startMessaging(buildEngine(device, wrappingKey), meta, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Registration failed" });
     }
   },
 
-  // Sign in on a NEW device for an existing account: authenticate, then
-  // generate + publish a fresh device key set and join the account.
   signIn: async ({ email, passphrase }) => {
     set({ busy: true, error: null });
     try {
@@ -164,20 +175,21 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       const uid = data.user.id;
       const username = (await directory.usernameOf?.(uid)) ?? email.split("@")[0];
       await new Promise((r) => setTimeout(r, 10));
-      const secret = createDeviceSecret();
+      const dev = await createSignalDevice();
+      const device: Device = { store: dev.store, bundle: dev.bundle, deviceId: `sdev_${crypto.randomUUID().slice(0, 8)}` };
       const meta: AccountMeta = {
         userId: uid,
         username,
         email,
-        deviceId: secret.deviceId,
-        identityKey: toBase64(secret.identityEd.pub),
+        deviceId: device.deviceId,
+        identityKey: device.bundle.identityKey,
         createdAt: Date.now(),
       };
-      const wrappingKey = await saveIdentity(secret, meta, passphrase);
-      await publishDevice(secret, uid);
+      const wrappingKey = await saveIdentity(serializeDevice(device), meta, passphrase);
+      await publishDevice(device.bundle, uid, device.deviceId);
       syncMe(meta);
-      set({ status: "unlocked", secret, meta, passphrase, busy: false });
-      void startMessaging(secret, meta, wrappingKey, directory).catch(() => {});
+      set({ status: "unlocked", device, meta, passphrase, busy: false });
+      void startMessaging(buildEngine(device, wrappingKey), meta, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Sign-in failed" });
     }
@@ -186,22 +198,19 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   unlock: async (passphrase) => {
     set({ busy: true, error: null });
     try {
-      // The local encrypted key store is the authoritative gate — unlocking it
-      // never depends on the network.
       const { secret, meta, wrappingKey } = await unlockIdentity(passphrase);
+      const device = deserializeDevice(secret);
       syncMe(meta);
-      set({ status: "unlocked", secret, meta, passphrase, busy: false });
+      set({ status: "unlocked", device, meta, passphrase, busy: false });
 
-      // Best-effort: establish a server session, refresh published keys, and
-      // bring messaging online. Failure (offline) leaves the app usably unlocked.
       if (isSupabaseConfigured && supabase) {
         void (async () => {
           try {
             const password = deriveAuthPassword(meta.email, passphrase);
             const { error } = await supabase.auth.signInWithPassword({ email: meta.email.trim(), password });
             if (!error) {
-              await publishDevice(secret, meta.userId);
-              await startMessaging(secret, meta, wrappingKey, directory);
+              await publishDevice(device.bundle, meta.userId, device.deviceId);
+              await startMessaging(buildEngine(device, wrappingKey), meta, directory);
             }
           } catch {
             /* local unlock already succeeded; directory sync can wait */
@@ -217,7 +226,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     set({ busy: true, error: null });
     try {
       const passphrase = await recoverPassphraseWithPasskey();
-      await get().unlock(passphrase); // runs the normal unlock path (sets state)
+      await get().unlock(passphrase);
     } catch (e) {
       const name = (e as { name?: string }).name;
       const msg =
@@ -245,7 +254,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   lock: () => {
     stopMessaging();
     if (supabase) void supabase.auth.signOut();
-    set({ status: "locked", secret: null, passphrase: null, error: null });
+    set({ status: "locked", device: null, passphrase: null, error: null });
   },
 
   wipe: async () => {
@@ -253,7 +262,6 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     const meta = get().meta;
     if (supabase) {
       try {
-        // Best-effort: drop this device's published keys before clearing the session.
         if (meta) await supabase.from("devices").delete().eq("id", meta.deviceId);
         await supabase.auth.signOut();
       } catch {
@@ -261,22 +269,22 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       }
     }
     await wipeIdentity();
-    set({ status: "none", secret: null, meta: null, passphrase: null, error: null, hasPasskey: false });
+    set({ status: "none", device: null, meta: null, passphrase: null, error: null, hasPasskey: false });
   },
 
   clearError: () => set({ error: null }),
 
   fingerprint: () => {
-    const s = get().secret;
-    return s ? shortFingerprint(s.identityEd.pub) : null;
+    const meta = get().meta;
+    return meta ? shortFingerprint(fromBase64(meta.identityKey)) : null;
   },
 
   safetyNumberWith: async (remoteUserId) => {
-    const { secret, meta } = get();
-    if (!secret || !meta) return null;
+    const meta = get().meta;
+    if (!meta) return null;
     const remoteKey = await directory.identityKeyOf(remoteUserId);
     if (!remoteKey) return null;
-    return computeSafetyNumber(meta.userId, secret.identityEd.pub, remoteUserId, remoteKey);
+    return signalSafetyNumber(meta.userId, meta.identityKey, remoteUserId, toBase64(remoteKey));
   },
 }));
 

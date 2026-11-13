@@ -10,7 +10,6 @@
  * by design.
  */
 
-import type { DeviceSecret, KeyPair, OneTimePreKeyRecord, SignedPreKeyRecord } from "./identity";
 import {
   aeadOpen,
   aeadSeal,
@@ -127,51 +126,8 @@ async function idbClear(): Promise<void> {
   }
 }
 
-// ---- (de)serialization of the secret ---------------------------------------
-
-const kp = (k: KeyPair) => ({ priv: toBase64(k.priv), pub: toBase64(k.pub) });
-const unKp = (o: { priv: string; pub: string }): KeyPair => ({ priv: fromBase64(o.priv), pub: fromBase64(o.pub) });
-
-function serializeSecret(s: DeviceSecret): Uint8Array {
-  const json = JSON.stringify({
-    version: s.version,
-    registrationId: s.registrationId,
-    deviceId: s.deviceId,
-    createdAt: s.createdAt,
-    identityEd: kp(s.identityEd),
-    signedPreKey: {
-      id: s.signedPreKey.id,
-      keyPair: kp(s.signedPreKey.keyPair),
-      signature: toBase64(s.signedPreKey.signature),
-      createdAt: s.signedPreKey.createdAt,
-    },
-    oneTimePreKeys: s.oneTimePreKeys.map((o) => ({ id: o.id, keyPair: kp(o.keyPair) })),
-  });
-  return new TextEncoder().encode(json);
-}
-
-function deserializeSecret(bytes: Uint8Array): DeviceSecret {
-  const o = JSON.parse(new TextDecoder().decode(bytes));
-  const signedPreKey: SignedPreKeyRecord = {
-    id: o.signedPreKey.id,
-    keyPair: unKp(o.signedPreKey.keyPair),
-    signature: fromBase64(o.signedPreKey.signature),
-    createdAt: o.signedPreKey.createdAt,
-  };
-  const oneTimePreKeys: OneTimePreKeyRecord[] = o.oneTimePreKeys.map((x: { id: number; keyPair: { priv: string; pub: string } }) => ({
-    id: x.id,
-    keyPair: unKp(x.keyPair),
-  }));
-  return {
-    version: 1,
-    registrationId: o.registrationId,
-    deviceId: o.deviceId,
-    createdAt: o.createdAt,
-    identityEd: unKp(o.identityEd),
-    signedPreKey,
-    oneTimePreKeys,
-  };
-}
+// The device secret is an opaque string (the serialized libsignal store); the
+// keystore only seals/unseals it and never interprets the key material.
 
 // ---- public API -------------------------------------------------------------
 
@@ -185,10 +141,10 @@ export async function hasStoredIdentity(): Promise<boolean> {
 }
 
 /** Seal and store the identity; returns the derived wrapping key (reused for sessions). */
-export async function saveIdentity(secret: DeviceSecret, meta: AccountMeta, passphrase: string): Promise<Uint8Array> {
+export async function saveIdentity(secret: string, meta: AccountMeta, passphrase: string): Promise<Uint8Array> {
   const salt = randomBytes(16);
   const key = deriveWrappingKey(passphrase, salt, DEFAULT_KDF);
-  const box = await aeadSeal(key, serializeSecret(secret), new TextEncoder().encode(meta.userId));
+  const box = await aeadSeal(key, new TextEncoder().encode(secret), new TextEncoder().encode(meta.userId));
   const env: StoredEnvelope = {
     version: 1,
     meta,
@@ -201,6 +157,15 @@ export async function saveIdentity(secret: DeviceSecret, meta: AccountMeta, pass
   return key;
 }
 
+/** Re-seal the stored secret with an already-derived wrapping key (no scrypt) — for
+ *  frequent session-state saves. Keeps the existing salt and meta. */
+export async function resealIdentity(secret: string, wrappingKey: Uint8Array): Promise<void> {
+  const env = await idbGet<StoredEnvelope>(SELF_KEY);
+  if (!env) return;
+  const box = await aeadSeal(wrappingKey, new TextEncoder().encode(secret), new TextEncoder().encode(env.meta.userId));
+  await idbPut(SELF_KEY, { ...env, iv: toBase64(box.iv), ciphertext: toBase64(box.ciphertext) });
+}
+
 export class UnlockError extends Error {
   constructor() {
     super("Incorrect passphrase");
@@ -210,14 +175,14 @@ export class UnlockError extends Error {
 
 export async function unlockIdentity(
   passphrase: string,
-): Promise<{ secret: DeviceSecret; meta: AccountMeta; wrappingKey: Uint8Array }> {
+): Promise<{ secret: string; meta: AccountMeta; wrappingKey: Uint8Array }> {
   const env = await idbGet<StoredEnvelope>(SELF_KEY);
   if (!env) throw new Error("No stored identity");
   const key = deriveWrappingKey(passphrase, fromBase64(env.salt), env.kdf);
   const box: SealedBox = { iv: fromBase64(env.iv), ciphertext: fromBase64(env.ciphertext) };
   try {
     const plaintext = await aeadOpen(key, box, new TextEncoder().encode(env.meta.userId));
-    return { secret: deserializeSecret(plaintext), meta: env.meta, wrappingKey: key };
+    return { secret: new TextDecoder().decode(plaintext), meta: env.meta, wrappingKey: key };
   } catch {
     // AEAD tag mismatch == wrong passphrase (or tampered store).
     throw new UnlockError();
@@ -225,7 +190,7 @@ export async function unlockIdentity(
 }
 
 /** Re-seal an updated secret (e.g. after consuming/rotating prekeys) without changing the passphrase. */
-export async function updateSecret(secret: DeviceSecret, passphrase: string): Promise<void> {
+export async function updateSecret(secret: string, passphrase: string): Promise<void> {
   const meta = await loadMeta();
   if (!meta) throw new Error("No stored identity");
   await saveIdentity(secret, meta, passphrase);

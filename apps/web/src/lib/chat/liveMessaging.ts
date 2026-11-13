@@ -12,11 +12,10 @@ import { supabase, isSupabaseConfigured } from "@/lib/backend/supabase";
 import type { KeyDirectory } from "@/lib/crypto/directory";
 import type { BundleSource, MediaRef } from "@/lib/crypto/messaging";
 import { MessagingService } from "@/lib/crypto/messaging";
-import type { DeviceSecret } from "@/lib/crypto/identity";
+import type { SessionEngine } from "@/lib/crypto/sessionEngine";
 import type { AccountMeta } from "@/lib/crypto/keystore";
-import { KeystoreSessionStore } from "@/lib/crypto/keystoreSessionStore";
 import { SupabaseTransport } from "@/lib/transport/supabaseTransport";
-import { hkdfSha256, toBase64, utf8 } from "@/lib/crypto/primitives";
+import { toBase64 } from "@/lib/crypto/primitives";
 import { recordAndCheck } from "@/lib/crypto/keyChange";
 import { startPresence, stopPresence } from "./livePresence";
 import { useChatStore } from "@/store/useChatStore";
@@ -28,21 +27,13 @@ export function isLiveMessaging(): boolean {
   return service != null;
 }
 
-export async function startMessaging(
-  secret: DeviceSecret,
-  meta: AccountMeta,
-  wrappingKey: Uint8Array,
-  directory: KeyDirectory,
-): Promise<void> {
+export async function startMessaging(engine: SessionEngine, meta: AccountMeta, directory: KeyDirectory): Promise<void> {
   if (!isSupabaseConfigured || !supabase) return;
   stopMessaging();
   directoryRef = directory;
 
-  // Session-store key: domain-separated from the keystore key (no extra scrypt).
-  const sessionKey = hkdfSha256(wrappingKey, utf8(`raven-sessions:${meta.userId}`), utf8("session-store"), 32);
-  const transport = new SupabaseTransport(supabase, meta.userId, secret.deviceId);
-  const store = new KeystoreSessionStore(sessionKey);
-  const svc = new MessagingService(secret, meta.userId, directory as unknown as BundleSource, transport, store);
+  const transport = new SupabaseTransport(supabase, meta.userId, engine.selfDeviceId);
+  const svc = new MessagingService(engine, meta.userId, directory as unknown as BundleSource, transport);
 
   svc.onMessage = async (m) => {
     let username = `user-${m.from.slice(0, 6)}`;

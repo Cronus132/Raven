@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createDeviceSecret, type DeviceSecret } from "./identity";
+import { createSignalDevice, type SignalPublicBundle } from "./signal/signalDevice";
+import { SignalStore } from "./signal/signalStore";
+import { SignalSessionEngine } from "./sessionEngine";
 import type { ResolvedPreKeyBundle } from "./x3dh";
-import { deserializeSession, serializeSession } from "./session";
+import { fromBase64 } from "./primitives";
 import {
-  InMemorySessionStore,
   MessagingService,
   type BundleSource,
   type InboundGroupMessage,
@@ -12,28 +13,15 @@ import {
 } from "./messaging";
 import { InMemoryMessageBus } from "@/lib/transport/transport";
 
-type DeviceEntry = {
-  base: Omit<ResolvedPreKeyBundle, "oneTimePreKey" | "oneTimePreKeyId">;
-  otks: { id: number; pub: Uint8Array }[];
-};
+type DeviceEntry = { bundle: SignalPublicBundle; otkIdx: number };
 
-/** Shared in-memory directory supporting multiple devices per user. */
+/** In-memory directory holding libsignal bundles, supporting multiple devices per user. */
 class InMemoryDirectory implements BundleSource {
-  private devices = new Map<string, Map<string, DeviceEntry>>(); // userId -> deviceId -> entry
+  private devices = new Map<string, Map<string, DeviceEntry>>();
 
-  publish(userId: string, secret: DeviceSecret) {
+  publish(userId: string, deviceId: string, bundle: SignalPublicBundle) {
     const dmap = this.devices.get(userId) ?? new Map<string, DeviceEntry>();
-    dmap.set(secret.deviceId, {
-      base: {
-        deviceId: secret.deviceId,
-        identityKey: secret.identityEd.pub,
-        signedPreKey: secret.signedPreKey.keyPair.pub,
-        signedPreKeyId: secret.signedPreKey.id,
-        signedPreKeySignature: secret.signedPreKey.signature,
-        registrationId: secret.registrationId,
-      },
-      otks: secret.oneTimePreKeys.map((o) => ({ id: o.id, pub: o.keyPair.pub })),
-    });
+    dmap.set(deviceId, { bundle, otkIdx: 0 });
     this.devices.set(userId, dmap);
   }
 
@@ -47,13 +35,22 @@ class InMemoryDirectory implements BundleSource {
     if (!dmap) return undefined;
     const id = deviceId ?? dmap.keys().next().value;
     const e = id ? dmap.get(id) : undefined;
-    if (!e) return undefined;
-    const otk = e.otks.shift();
-    return { ...e.base, oneTimePreKey: otk?.pub, oneTimePreKeyId: otk?.id };
+    if (!e || !id) return undefined;
+    const otk = e.bundle.oneTimePreKeys[e.otkIdx++];
+    return {
+      deviceId: id,
+      registrationId: e.bundle.registrationId,
+      identityKey: fromBase64(e.bundle.identityKey),
+      signedPreKeyId: e.bundle.signedPreKeyId,
+      signedPreKey: fromBase64(e.bundle.signedPreKey),
+      signedPreKeySignature: fromBase64(e.bundle.signedPreKeySignature),
+      oneTimePreKey: otk ? fromBase64(otk.publicKey) : undefined,
+      oneTimePreKeyId: otk?.keyId,
+    };
   }
 }
 
-async function waitFor(cond: () => boolean, ms = 1000) {
+async function waitFor(cond: () => boolean, ms = 2000) {
   const start = Date.now();
   while (!cond()) {
     if (Date.now() - start > ms) throw new Error("waitFor timed out");
@@ -61,212 +58,138 @@ async function waitFor(cond: () => boolean, ms = 1000) {
   }
 }
 
-function service(bus: InMemoryMessageBus, dir: InMemoryDirectory, secret: DeviceSecret, userId: string) {
+async function makeMember(bus: InMemoryMessageBus, dir: InMemoryDirectory, userId: string, deviceId: string) {
+  const dev = await createSignalDevice(20);
+  dir.publish(userId, deviceId, dev.bundle);
+  const engine = new SignalSessionEngine(dev.store, deviceId, dev.bundle.identityKey);
+  const svc = new MessagingService(engine, userId, dir, bus.forDevice(userId, deviceId));
   const inbox: InboundMessage[] = [];
-  const svc = new MessagingService(secret, userId, dir, bus.forDevice(userId, secret.deviceId));
+  const groupInbox: InboundGroupMessage[] = [];
   svc.onMessage = (m) => inbox.push(m);
-  return { svc, inbox };
+  svc.onGroupMessage = (m) => groupInbox.push(m);
+  return { dev, engine, svc, inbox, groupInbox, deviceId };
 }
 
-function setup() {
+async function setup() {
   const bus = new InMemoryMessageBus();
   const dir = new InMemoryDirectory();
-  const aliceSecret = createDeviceSecret(10);
-  const bobSecret = createDeviceSecret(10);
-  dir.publish("alice", aliceSecret);
-  dir.publish("bob", bobSecret);
-
-  const aliceStore = new InMemorySessionStore();
-  const alice = new MessagingService(aliceSecret, "alice", dir, bus.forDevice("alice", aliceSecret.deviceId), aliceStore);
-  const bob = new MessagingService(bobSecret, "bob", dir, bus.forDevice("bob", bobSecret.deviceId));
-
-  const aliceInbox: InboundMessage[] = [];
-  const bobInbox: InboundMessage[] = [];
-  alice.onMessage = (m) => aliceInbox.push(m);
-  bob.onMessage = (m) => bobInbox.push(m);
-
-  return { bus, dir, aliceSecret, bobSecret, alice, bob, aliceStore, aliceInbox, bobInbox };
+  const alice = await makeMember(bus, dir, "alice", "alice-d1");
+  const bob = await makeMember(bus, dir, "bob", "bob-d1");
+  return { bus, dir, alice, bob };
 }
 
-describe("MessagingService transport", () => {
-  it("delivers a message via the offline queue (recipient offline at send time)", async () => {
-    const { bus, bobSecret, alice, bob, bobInbox } = setup();
+describe("MessagingService (libsignal engine)", () => {
+  it("delivers via the offline queue (recipient offline at send time)", async () => {
+    const { bus, alice, bob } = await setup();
+    await alice.svc.sendText("bob", "hello from alice");
 
-    await alice.sendText("bob", "hello from alice");
-
-    const queued = await bus.forDevice("bob", bobSecret.deviceId).fetchQueued();
+    const queued = await bus.forDevice("bob", "bob-d1").fetchQueued();
     expect(queued).toHaveLength(1);
     expect(queued[0].ciphertext).not.toContain("hello");
 
-    await bob.start();
-    await waitFor(() => bobInbox.length === 1);
-    expect(bobInbox[0]).toMatchObject({ from: "alice", text: "hello from alice", outgoing: false });
-
-    expect(await bus.forDevice("bob", bobSecret.deviceId).fetchQueued()).toHaveLength(0);
-    bob.stop();
+    await bob.svc.start();
+    await waitFor(() => bob.inbox.length === 1);
+    expect(bob.inbox[0]).toMatchObject({ from: "alice", text: "hello from alice", outgoing: false });
+    expect(await bus.forDevice("bob", "bob-d1").fetchQueued()).toHaveLength(0);
+    bob.svc.stop();
   });
 
-  it("delivers in realtime and ratchets a back-and-forth", async () => {
-    const { alice, bob, aliceInbox, bobInbox } = setup();
-    await alice.start();
-    await bob.start();
+  it("ratchets a realtime back-and-forth", async () => {
+    const { alice, bob } = await setup();
+    await alice.svc.start();
+    await bob.svc.start();
 
-    await alice.sendText("bob", "hi bob");
-    await waitFor(() => bobInbox.length === 1);
-    expect(bobInbox[0].text).toBe("hi bob");
-
-    await bob.sendText("alice", "hey alice");
-    await waitFor(() => aliceInbox.length === 1);
-    expect(aliceInbox[0].text).toBe("hey alice");
-
+    await alice.svc.sendText("bob", "hi bob");
+    await waitFor(() => bob.inbox.length === 1);
+    await bob.svc.sendText("alice", "hey alice");
+    await waitFor(() => alice.inbox.length === 1);
     for (let i = 0; i < 4; i++) {
-      await alice.sendText("bob", `a${i}`);
-      await waitFor(() => bobInbox.length === 2 + i);
-      await bob.sendText("alice", `b${i}`);
-      await waitFor(() => aliceInbox.length === 2 + i);
+      await alice.svc.sendText("bob", `a${i}`);
+      await waitFor(() => bob.inbox.length === 2 + i);
+      await bob.svc.sendText("alice", `b${i}`);
+      await waitFor(() => alice.inbox.length === 2 + i);
     }
-    expect(bobInbox.map((m) => m.text)).toEqual(["hi bob", "a0", "a1", "a2", "a3"]);
-    expect(aliceInbox.map((m) => m.text)).toEqual(["hey alice", "b0", "b1", "b2", "b3"]);
-
-    alice.stop();
-    bob.stop();
+    expect(bob.inbox.map((m) => m.text)).toEqual(["hi bob", "a0", "a1", "a2", "a3"]);
+    expect(alice.inbox.map((m) => m.text)).toEqual(["hey alice", "b0", "b1", "b2", "b3"]);
+    alice.svc.stop();
+    bob.svc.stop();
   });
 
-  it("keeps the session usable after serialize/deserialize (reload)", async () => {
-    const { bus, dir, aliceSecret, bobSecret, alice, bob, aliceStore, bobInbox } = setup();
-    await bob.start();
+  it("keeps the session usable after store serialize/deserialize", async () => {
+    const { bus, dir, alice, bob } = await setup();
+    await bob.svc.start();
+    await alice.svc.sendText("bob", "before reload");
+    await waitFor(() => bob.inbox.length === 1);
 
-    await alice.sendText("bob", "before reload");
-    await waitFor(() => bobInbox.length === 1);
-
-    // Simulate Alice reloading: persist her session, rebuild from the blob.
-    const rec = await aliceStore.load("bob", bobSecret.deviceId);
-    expect(rec).toBeDefined();
-    const blob = serializeSession(rec!.session);
-    const restoredStore = new InMemorySessionStore();
-    await restoredStore.save({ peerUserId: "bob", peerDevice: rec!.peerDevice, session: deserializeSession(blob) });
-
-    const alice2 = new MessagingService(aliceSecret, "alice", dir, bus.forDevice("alice", aliceSecret.deviceId), restoredStore);
+    const restored = SignalStore.deserialize(alice.dev.store.serialize());
+    const engine2 = new SignalSessionEngine(restored, "alice-d1", alice.dev.bundle.identityKey);
+    const alice2 = new MessagingService(engine2, "alice", dir, bus.forDevice("alice", "alice-d1"));
     await alice2.sendText("bob", "after reload");
-    await waitFor(() => bobInbox.length === 2);
-    expect(bobInbox.map((m) => m.text)).toEqual(["before reload", "after reload"]);
-
-    bob.stop();
+    await waitFor(() => bob.inbox.length === 2);
+    expect(bob.inbox.map((m) => m.text)).toEqual(["before reload", "after reload"]);
+    bob.svc.stop();
   });
-});
 
-describe("receipts", () => {
   it("acknowledges delivery automatically and read on request", async () => {
-    const { alice, bob, bobInbox } = setup();
-    const aliceReceipts: Receipt[] = [];
-    alice.onReceipt = (r) => aliceReceipts.push(r);
-    await alice.start();
-    await bob.start();
-
-    await alice.sendText("bob", "ping", "msg-1");
-    await waitFor(() => bobInbox.length === 1);
-    // Bob's device auto-acks delivery.
-    await waitFor(() => aliceReceipts.some((r) => r.kind === "delivered" && r.ids.includes("msg-1")));
-    // Bob reads the conversation.
-    await bob.sendReceipt("alice", "read", ["msg-1"]);
-    await waitFor(() => aliceReceipts.some((r) => r.kind === "read" && r.ids.includes("msg-1")));
-
-    alice.stop();
-    bob.stop();
+    const { alice, bob } = await setup();
+    const receipts: Receipt[] = [];
+    alice.svc.onReceipt = (r) => receipts.push(r);
+    await alice.svc.start();
+    await bob.svc.start();
+    await alice.svc.sendText("bob", "ping", "msg-1");
+    await waitFor(() => bob.inbox.length === 1);
+    await waitFor(() => receipts.some((r) => r.kind === "delivered" && r.ids.includes("msg-1")));
+    await bob.svc.sendReceipt("alice", "read", ["msg-1"]);
+    await waitFor(() => receipts.some((r) => r.kind === "read" && r.ids.includes("msg-1")));
+    alice.svc.stop();
+    bob.svc.stop();
   });
 });
 
-describe("group messaging over transport", () => {
+describe("multi-device + groups (libsignal engine)", () => {
+  it("fans out to every recipient device and syncs to the sender's own devices", async () => {
+    const bus = new InMemoryMessageBus();
+    const dir = new InMemoryDirectory();
+    const alice1 = await makeMember(bus, dir, "alice", "alice-d1");
+    const alice2 = await makeMember(bus, dir, "alice", "alice-d2");
+    const bob1 = await makeMember(bus, dir, "bob", "bob-d1");
+    const bob2 = await makeMember(bus, dir, "bob", "bob-d2");
+    await alice2.svc.start();
+    await bob1.svc.start();
+    await bob2.svc.start();
+
+    await alice1.svc.sendText("bob", "hi everyone");
+    await waitFor(() => bob1.inbox.length === 1 && bob2.inbox.length === 1 && alice2.inbox.length === 1);
+    expect(bob1.inbox[0]).toMatchObject({ from: "alice", text: "hi everyone", outgoing: false });
+    expect(bob2.inbox[0].text).toBe("hi everyone");
+    // alice's second device sees it as its own outgoing message, in the chat with bob
+    expect(alice2.inbox[0]).toMatchObject({ from: "bob", text: "hi everyone", outgoing: true });
+    alice2.svc.stop();
+    bob1.svc.stop();
+    bob2.svc.stop();
+  });
+
   it("delivers a group message to every member and supports replies", async () => {
     const bus = new InMemoryMessageBus();
     const dir = new InMemoryDirectory();
-    const users = ["A", "B", "C"] as const;
-    const secrets = Object.fromEntries(users.map((u) => [u, createDeviceSecret(20)]));
-    for (const u of users) dir.publish(u, secrets[u]);
-
-    const svc: Record<string, MessagingService> = {};
-    const inbox: Record<string, InboundGroupMessage[]> = {};
-    for (const u of users) {
-      const m = new MessagingService(secrets[u], u, dir, bus.forDevice(u, secrets[u].deviceId));
-      inbox[u] = [];
-      m.onGroupMessage = (x) => inbox[u].push(x);
-      svc[u] = m;
-      await m.start();
-    }
-
-    // Pre-establish pairwise sessions (as real users who have chatted before),
-    // so group key distribution doesn't hit simultaneous session initiation.
-    await svc.A.sendText("B", "hi", "pre1");
-    await svc.A.sendText("C", "hi", "pre2");
-    await svc.B.sendText("C", "hi", "pre3");
-    await new Promise((r) => setTimeout(r, 50));
+    const A = await makeMember(bus, dir, "A", "A-d1");
+    const B = await makeMember(bus, dir, "B", "B-d1");
+    const C = await makeMember(bus, dir, "C", "C-d1");
+    await A.svc.start();
+    await B.svc.start();
+    await C.svc.start();
 
     const gid = "grp-1";
-    await svc.A.createGroup(gid, "Team", ["B", "C"]);
-    await svc.A.sendGroupText(gid, "hello team", "m1");
-    await waitFor(() => inbox.B.length >= 1 && inbox.C.length >= 1, 2000);
-    expect(inbox.B[0]).toMatchObject({ groupId: gid, from: "A", text: "hello team", outgoing: false });
-    expect(inbox.C[0].text).toBe("hello team");
+    await A.svc.createGroup(gid, "Team", ["B", "C"]);
+    await A.svc.sendGroupText(gid, "hello team", "m1");
+    await waitFor(() => B.groupInbox.length >= 1 && C.groupInbox.length >= 1);
+    expect(B.groupInbox[0]).toMatchObject({ groupId: gid, from: "A", text: "hello team", outgoing: false });
+    expect(C.groupInbox[0].text).toBe("hello team");
 
-    // B replies; A and C receive it.
-    await svc.B.sendGroupText(gid, "hey all", "m2");
-    await waitFor(() => inbox.A.some((x) => x.text === "hey all") && inbox.C.some((x) => x.text === "hey all"), 2000);
-
-    for (const u of users) svc[u].stop();
-  });
-});
-
-describe("multi-device fan-out", () => {
-  it("fans a message out to every one of the recipient's devices", async () => {
-    const bus = new InMemoryMessageBus();
-    const dir = new InMemoryDirectory();
-    const aliceSecret = createDeviceSecret(10);
-    const bob1 = createDeviceSecret(10);
-    const bob2 = createDeviceSecret(10);
-    dir.publish("alice", aliceSecret);
-    dir.publish("bob", bob1);
-    dir.publish("bob", bob2);
-
-    const alice = new MessagingService(aliceSecret, "alice", dir, bus.forDevice("alice", aliceSecret.deviceId));
-    const b1 = service(bus, dir, bob1, "bob");
-    const b2 = service(bus, dir, bob2, "bob");
-    await b1.svc.start();
-    await b2.svc.start();
-
-    await alice.sendText("bob", "to all bob devices");
-    await waitFor(() => b1.inbox.length === 1 && b2.inbox.length === 1);
-    expect(b1.inbox[0]).toMatchObject({ from: "alice", text: "to all bob devices", outgoing: false });
-    expect(b2.inbox[0]).toMatchObject({ from: "alice", text: "to all bob devices", outgoing: false });
-
-    b1.svc.stop();
-    b2.svc.stop();
-  });
-
-  it("syncs a sent message to the sender's own other devices", async () => {
-    const bus = new InMemoryMessageBus();
-    const dir = new InMemoryDirectory();
-    const alice1 = createDeviceSecret(10);
-    const alice2 = createDeviceSecret(10);
-    const bobSecret = createDeviceSecret(10);
-    dir.publish("alice", alice1);
-    dir.publish("alice", alice2);
-    dir.publish("bob", bobSecret);
-
-    const a1 = new MessagingService(alice1, "alice", dir, bus.forDevice("alice", alice1.deviceId));
-    const a2 = service(bus, dir, alice2, "alice");
-    const bob = service(bus, dir, bobSecret, "bob");
-    await a2.svc.start();
-    await bob.svc.start();
-
-    await a1.sendText("bob", "hi from my laptop");
-    await waitFor(() => bob.inbox.length === 1 && a2.inbox.length === 1);
-
-    // Bob sees an inbound message from alice.
-    expect(bob.inbox[0]).toMatchObject({ from: "alice", text: "hi from my laptop", outgoing: false });
-    // Alice's second device sees it as its OWN outgoing message, in the chat with bob.
-    expect(a2.inbox[0]).toMatchObject({ from: "bob", text: "hi from my laptop", outgoing: true });
-
-    a2.svc.stop();
-    bob.svc.stop();
+    await B.svc.sendGroupText(gid, "hey all", "m2");
+    await waitFor(() => A.groupInbox.some((x) => x.text === "hey all") && C.groupInbox.some((x) => x.text === "hey all"));
+    A.svc.stop();
+    B.svc.stop();
+    C.svc.stop();
   });
 });

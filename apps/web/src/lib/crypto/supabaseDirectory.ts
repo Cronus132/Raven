@@ -49,6 +49,56 @@ export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
     return this.db;
   }
 
+  /** Publish a device's libsignal public bundle. `userId` is the account uid (= auth.uid()). */
+  async publishSignalBundle(
+    bundle: {
+      registrationId: number;
+      identityKey: string;
+      signedPreKeyId: number;
+      signedPreKey: string;
+      signedPreKeySignature: string;
+      oneTimePreKeys: { keyId: number; publicKey: string }[];
+    },
+    userId: string,
+    deviceId: string,
+  ): Promise<void> {
+    const db = this.client();
+    const { error: devErr } = await db.from("devices").upsert(
+      {
+        id: deviceId,
+        user_id: userId,
+        registration_id: bundle.registrationId,
+        identity_key: bundle.identityKey,
+        last_seen_at: new Date().toISOString(),
+      },
+      { onConflict: "id" },
+    );
+    if (devErr) throw devErr;
+
+    const { error: spkErr } = await db.from("signed_prekeys").upsert(
+      {
+        device_id: deviceId,
+        key_id: bundle.signedPreKeyId,
+        public_key: bundle.signedPreKey,
+        signature: bundle.signedPreKeySignature,
+      },
+      { onConflict: "device_id,key_id" },
+    );
+    if (spkErr) throw spkErr;
+
+    if (bundle.oneTimePreKeys.length) {
+      const rows = bundle.oneTimePreKeys.map((o) => ({
+        device_id: deviceId,
+        key_id: o.keyId,
+        public_key: o.publicKey,
+      }));
+      const { error: otkErr } = await db
+        .from("one_time_prekeys")
+        .upsert(rows, { onConflict: "device_id,key_id", ignoreDuplicates: true });
+      if (otkErr) throw otkErr;
+    }
+  }
+
   /** Publish the device's full public key set. `userId` is the account uid (= auth.uid()). */
   async publishKeys(secret: DeviceSecret, userId: string): Promise<void> {
     const db = this.client();
