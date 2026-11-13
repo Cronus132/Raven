@@ -3,11 +3,15 @@ import { Eye, EyeOff, Loader2, KeyRound, ShieldCheck, Fingerprint, Server } from
 import { useIdentityStore } from "@/store/useIdentityStore";
 import { cn } from "@/lib/utils";
 import { AuthShell, Field, inputClass } from "./AuthShell";
+import { SignIn } from "./SignIn";
 
 export function Onboarding() {
   const register = useIdentityStore((s) => s.register);
   const busy = useIdentityStore((s) => s.busy);
   const error = useIdentityStore((s) => s.error);
+  const [mode, setMode] = useState<"register" | "signin">("register");
+
+  if (mode === "signin") return <SignIn onBack={() => setMode("register")} />;
 
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -130,6 +134,14 @@ export function Onboarding() {
           <Assurance icon={Server} label="Server gets ciphertext" />
           <Assurance icon={ShieldCheck} label="X3DH + ratchet" />
         </div>
+
+        <button
+          type="button"
+          onClick={() => setMode("signin")}
+          className="mx-auto flex items-center justify-center text-[12.5px] text-[var(--color-ink-faint)] hover:text-[var(--color-ink-dim)]"
+        >
+          Already have an account? Sign in on this device
+        </button>
       </form>
     </AuthShell>
   );

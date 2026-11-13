@@ -63,6 +63,7 @@ interface IdentityState {
 
   init: () => Promise<void>;
   register: (input: { username: string; email: string; passphrase: string }) => Promise<void>;
+  signIn: (input: { email: string; passphrase: string }) => Promise<void>;
   unlock: (passphrase: string) => Promise<void>;
   unlockWithPasskey: () => Promise<void>;
   enrollPasskey: () => Promise<void>;
@@ -148,6 +149,37 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       void startMessaging(secret, meta, wrappingKey, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Registration failed" });
+    }
+  },
+
+  // Sign in on a NEW device for an existing account: authenticate, then
+  // generate + publish a fresh device key set and join the account.
+  signIn: async ({ email, passphrase }) => {
+    set({ busy: true, error: null });
+    try {
+      if (!(isSupabaseConfigured && supabase)) throw new Error("Sign-in needs the backend configured.");
+      const password = deriveAuthPassword(email, passphrase);
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (error || !data.user) throw new Error("Incorrect email or passphrase.");
+      const uid = data.user.id;
+      const username = (await directory.usernameOf?.(uid)) ?? email.split("@")[0];
+      await new Promise((r) => setTimeout(r, 10));
+      const secret = createDeviceSecret();
+      const meta: AccountMeta = {
+        userId: uid,
+        username,
+        email,
+        deviceId: secret.deviceId,
+        identityKey: toBase64(secret.identityEd.pub),
+        createdAt: Date.now(),
+      };
+      const wrappingKey = await saveIdentity(secret, meta, passphrase);
+      await publishDevice(secret, uid);
+      syncMe(meta);
+      set({ status: "unlocked", secret, meta, passphrase, busy: false });
+      void startMessaging(secret, meta, wrappingKey, directory).catch(() => {});
+    } catch (e) {
+      set({ busy: false, error: e instanceof Error ? e.message : "Sign-in failed" });
     }
   },
 
