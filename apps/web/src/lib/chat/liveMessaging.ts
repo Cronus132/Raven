@@ -10,7 +10,7 @@
 
 import { supabase, isSupabaseConfigured } from "@/lib/backend/supabase";
 import type { KeyDirectory } from "@/lib/crypto/directory";
-import type { BundleSource } from "@/lib/crypto/messaging";
+import type { BundleSource, MediaRef } from "@/lib/crypto/messaging";
 import { MessagingService } from "@/lib/crypto/messaging";
 import type { DeviceSecret } from "@/lib/crypto/identity";
 import type { AccountMeta } from "@/lib/crypto/keystore";
@@ -50,9 +50,26 @@ export async function startMessaging(
     } catch {
       /* label fallback */
     }
-    useChatStore
-      .getState()
-      .receiveLiveMessage({ peerUserId: m.from, username, text: m.text, outgoing: m.outgoing, remoteId: m.id });
+    const attachment = m.media
+      ? {
+          id: m.id,
+          kind: m.media.kind,
+          name: m.media.name,
+          size: m.media.size,
+          mime: m.media.mime,
+          path: m.media.path,
+          key: m.media.key,
+          iv: m.media.iv,
+        }
+      : undefined;
+    useChatStore.getState().receiveLiveMessage({
+      peerUserId: m.from,
+      username,
+      text: m.text,
+      outgoing: m.outgoing,
+      remoteId: m.id,
+      attachment,
+    });
   };
 
   svc.onReceipt = (r) => {
@@ -88,6 +105,16 @@ export async function sendLive(peerUserId: string, text: string, messageId: stri
 export async function sendReadReceipt(peerUserId: string, remoteIds: string[]): Promise<void> {
   if (!service || remoteIds.length === 0) return;
   await service.sendReceipt(peerUserId, "read", remoteIds).catch(() => {});
+}
+
+export async function sendMediaLive(
+  peerUserId: string,
+  media: MediaRef,
+  messageId: string,
+  caption?: string,
+): Promise<void> {
+  if (!service) throw new Error("Messaging is offline — try again in a moment.");
+  await service.sendMedia(peerUserId, media, messageId, caption);
 }
 
 /** Resolve a public @username to an account, for starting a conversation. */

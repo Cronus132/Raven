@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
 import { Plus, Smile, Mic, SendHorizontal, Lock, X } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
-import { sendLive } from "@/lib/chat/liveMessaging";
+import { sendLive, sendMediaLive } from "@/lib/chat/liveMessaging";
 import { sendTyping } from "@/lib/chat/livePresence";
+import { uploadAttachment } from "@/lib/chat/media";
 import { cn } from "@/lib/utils";
 import type { Conversation } from "@/types";
 
@@ -10,7 +11,9 @@ export function Composer({ conv }: { conv: Conversation }) {
   const setDraft = useChatStore((s) => s.setDraft);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const appendOutgoing = useChatStore((s) => s.appendOutgoing);
+  const appendOutgoingMedia = useChatStore((s) => s.appendOutgoingMedia);
   const setMessageStatus = useChatStore((s) => s.setMessageStatus);
+  const fileRef = useRef<HTMLInputElement>(null);
   const replyTo = useChatStore((s) => s.replyTo);
   const setReplyTo = useChatStore((s) => s.setReplyTo);
   const userById = useChatStore((s) => s.userById);
@@ -64,6 +67,27 @@ export function Composer({ conv }: { conv: Conversation }) {
     }
   };
 
+  const handleFile = async (file?: File | null) => {
+    if (!file || !conv.real || !conv.peerUserId) return;
+    const kind = file.type.startsWith("image/") ? "image" : "file";
+    const url = URL.createObjectURL(file);
+    const id = appendOutgoingMedia(conv.id, {
+      id: crypto.randomUUID(),
+      kind,
+      name: file.name,
+      size: file.size,
+      mime: file.type,
+      url,
+    });
+    try {
+      const ref = await uploadAttachment(file);
+      await sendMediaLive(conv.peerUserId, ref, id);
+      setMessageStatus(id, "sent");
+    } catch {
+      setMessageStatus(id, "failed");
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -93,7 +117,22 @@ export function Composer({ conv }: { conv: Conversation }) {
       )}
 
       <div className="flex items-end gap-2">
-        <button className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--color-ink-dim)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-ink)]" title="Attach">
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => {
+            void handleFile(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={!conv.real}
+          title={conv.real ? "Attach an encrypted file" : "Attachments are available in live chats"}
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-[var(--color-ink-dim)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-ink)] disabled:opacity-40"
+        >
           <Plus className="h-5 w-5" />
         </button>
 

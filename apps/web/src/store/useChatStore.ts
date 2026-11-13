@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Conversation, Message, MessageStatus, User } from "@/types";
+import type { Attachment, Conversation, Message, MessageStatus, User } from "@/types";
 import { CONVERSATIONS, MESSAGES, USERS, ME } from "@/data/seed";
 
 type Filter = "all" | "unread" | "groups";
@@ -34,6 +34,7 @@ interface ChatState {
 
   // live (real E2E) messaging
   appendOutgoing: (conversationId: string, body: string) => string;
+  appendOutgoingMedia: (conversationId: string, attachment: Attachment, caption?: string) => string;
   setMessageStatus: (messageId: string, status: MessageStatus) => void;
   startLiveConversation: (peer: { peerUserId: string; username: string }) => string;
   receiveLiveMessage: (msg: {
@@ -42,6 +43,7 @@ interface ChatState {
     text: string;
     outgoing?: boolean;
     remoteId?: string;
+    attachment?: Attachment;
   }) => void;
   inboundRemoteIds: (conversationId: string) => string[];
   setOnlineUsers: (userIds: string[]) => void;
@@ -194,6 +196,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return id;
   },
 
+  appendOutgoingMedia: (conversationId, attachment, caption) => {
+    const id = nextId("m");
+    const m: Message = {
+      id,
+      conversationId,
+      senderId: "me",
+      kind: attachment.kind === "image" ? "image" : "file",
+      body: caption,
+      attachment,
+      createdAt: Date.now(),
+      status: "sending",
+    };
+    set((s) => ({ messages: [...s.messages, m] }));
+    return id;
+  },
+
   setMessageStatus: (messageId, status) =>
     set((s) => ({
       messages: s.messages.map((m) => (m.id === messageId ? { ...m, status } : m)),
@@ -234,16 +252,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ),
     })),
 
-  receiveLiveMessage: ({ peerUserId, username, text, outgoing, remoteId }) => {
+  receiveLiveMessage: ({ peerUserId, username, text, outgoing, remoteId, attachment }) => {
     set((s) => {
       const { users, conversations, convId } = ensureLivePeer(s, peerUserId, username);
       // `outgoing` = a copy of our own message synced from another of our devices.
+      const kind = attachment ? (attachment.kind === "image" ? "image" : "file") : "text";
       const m: Message = {
         id: nextId("m"),
         conversationId: convId,
         senderId: outgoing ? "me" : peerUserId,
-        kind: "text",
-        body: text,
+        kind,
+        body: text || undefined,
+        attachment,
         createdAt: Date.now(),
         status: outgoing ? "sent" : "read",
         remoteId: outgoing ? undefined : remoteId,

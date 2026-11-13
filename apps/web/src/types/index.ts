@@ -33,8 +33,14 @@ export interface Attachment {
   width?: number;
   height?: number;
   duration?: number; // seconds (voice)
-  // In the real app this is an opaque blob id + a per-blob key held only on the client.
   previewColor?: string;
+  // Real encrypted attachment: ciphertext storage path + per-blob key (client only).
+  mime?: string;
+  path?: string;
+  key?: string;
+  iv?: string;
+  // Client-only decrypted/preview object URL (never serialized to the wire).
+  url?: string;
 }
 
 export interface Message {

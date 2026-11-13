@@ -1,8 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, CheckCheck, Clock, Image as ImageIcon, FileText, Download, Reply, SmilePlus } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
+import { downloadAttachment } from "@/lib/chat/media";
 import { cn, formatBytes, formatTime } from "@/lib/utils";
-import type { Message } from "@/types";
+import type { Attachment, Message } from "@/types";
+
+/** Resolve an attachment to a renderable object URL (local preview, or download + decrypt). */
+function useAttachmentUrl(a?: Attachment): string | undefined {
+  const [url, setUrl] = useState(a?.url);
+  useEffect(() => {
+    if (a?.url) {
+      setUrl(a.url);
+      return;
+    }
+    if (a?.path && a.key && a.iv) {
+      let alive = true;
+      void downloadAttachment({ path: a.path, key: a.key, iv: a.iv, mime: a.mime })
+        .then((u) => {
+          if (alive) setUrl(u);
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }
+  }, [a?.url, a?.path, a?.key, a?.iv, a?.mime]);
+  return url;
+}
 
 const QUICK = ["❤️", "🔥", "👍", "😂", "🙌", "🔒"];
 
@@ -157,20 +181,26 @@ function Receipt({ status }: { status: Message["status"] }) {
 
 function ImageBlock({ message }: { message: Message }) {
   const a = message.attachment;
+  const url = useAttachmentUrl(a);
   return (
     <div className="mb-1 overflow-hidden rounded-[var(--radius-sm)]">
-      <div
-        className="grid aspect-[3/2] w-[min(340px,60vw)] place-items-center"
-        style={{ background: `linear-gradient(135deg, ${a?.previewColor ?? "#13302a"}, #0d1714)` }}
-      >
-        <ImageIcon className="h-8 w-8 text-white/30" />
-      </div>
+      {url ? (
+        <img src={url} alt={a?.name ?? "image"} className="max-h-[360px] w-[min(340px,60vw)] object-cover" />
+      ) : (
+        <div
+          className="grid aspect-[3/2] w-[min(340px,60vw)] place-items-center"
+          style={{ background: `linear-gradient(135deg, ${a?.previewColor ?? "#13302a"}, #0d1714)` }}
+        >
+          <ImageIcon className="h-8 w-8 text-white/30" />
+        </div>
+      )}
     </div>
   );
 }
 
 function FileBlock({ message, mine }: { message: Message; mine: boolean }) {
   const a = message.attachment;
+  const url = useAttachmentUrl(a);
   return (
     <div
       className={cn(
@@ -185,9 +215,17 @@ function FileBlock({ message, mine }: { message: Message; mine: boolean }) {
         <p className="truncate text-[13.5px] font-medium">{a?.name}</p>
         <p className="text-[11px] opacity-70">{formatBytes(a?.size)}</p>
       </div>
-      <button className="grid h-8 w-8 shrink-0 place-items-center rounded-full hover:bg-white/10">
+      <a
+        href={url ?? undefined}
+        download={a?.name}
+        aria-disabled={!url}
+        className={cn(
+          "grid h-8 w-8 shrink-0 place-items-center rounded-full hover:bg-white/10",
+          !url && "pointer-events-none opacity-40",
+        )}
+      >
         <Download className="h-4 w-4" />
-      </button>
+      </a>
     </div>
   );
 }

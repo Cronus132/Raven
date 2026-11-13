@@ -35,10 +35,22 @@ export interface BundleSource {
   deviceList(userId: string): Promise<{ userId: string; deviceIds: string[] } | undefined>;
 }
 
+/** A reference to an encrypted attachment: where to fetch it and how to decrypt it. */
+export interface MediaRef {
+  name: string;
+  mime: string;
+  size: number;
+  kind: "image" | "file";
+  path: string; // storage path of the ciphertext blob
+  key: string; // base64 AES key (travels only inside the E2E message)
+  iv: string; // base64
+}
+
 /** The decrypted payloads the ratchet protects. */
 type TextPayload = { v: 1; t: "text"; from: string; to: string; id: string; body: string };
 type ReceiptPayload = { v: 1; t: "receipt"; from: string; to: string; kind: "delivered" | "read"; ids: string[] };
-type Payload = TextPayload | ReceiptPayload;
+type MediaPayload = { v: 1; t: "media"; from: string; to: string; id: string; caption?: string; media: MediaRef };
+type Payload = TextPayload | ReceiptPayload | MediaPayload;
 
 function encodePayload(p: Payload): Uint8Array {
   return utf8(JSON.stringify(p));
@@ -81,6 +93,8 @@ export interface InboundMessage {
   id: string;
   /** True when this is one of our own messages, synced from another of our devices. */
   outgoing: boolean;
+  /** Present when the message carries an encrypted attachment. */
+  media?: MediaRef;
 }
 
 export interface Receipt {
@@ -121,6 +135,12 @@ export class MessagingService {
   /** Encrypt and fan a text message out to every recipient device and our own other devices. */
   async sendText(peerUserId: string, text: string, messageId: string = crypto.randomUUID()): Promise<void> {
     const plaintext = encodePayload({ v: 1, t: "text", from: this.selfUserId, to: peerUserId, id: messageId, body: text });
+    await this.deliver(await this.fanoutTargets(peerUserId), plaintext);
+  }
+
+  /** Encrypt and fan an attachment message out (the blob itself is already uploaded). */
+  async sendMedia(peerUserId: string, media: MediaRef, messageId: string, caption?: string): Promise<void> {
+    const plaintext = encodePayload({ v: 1, t: "media", from: this.selfUserId, to: peerUserId, id: messageId, caption, media });
     await this.deliver(await this.fanoutTargets(peerUserId), plaintext);
   }
 
@@ -207,7 +227,18 @@ export class MessagingService {
 
     const outgoing = payload.from === this.selfUserId; // a sync copy of our own message
     const conversationPeer = outgoing ? payload.to : payload.from;
-    this.onMessage?.({ from: conversationPeer, fromDevice: senderDevice, text: payload.body, outgoing, id: payload.id });
+    if (payload.t === "media") {
+      this.onMessage?.({
+        from: conversationPeer,
+        fromDevice: senderDevice,
+        text: payload.caption ?? "",
+        id: payload.id,
+        outgoing,
+        media: payload.media,
+      });
+    } else {
+      this.onMessage?.({ from: conversationPeer, fromDevice: senderDevice, text: payload.body, outgoing, id: payload.id });
+    }
     // Acknowledge delivery back to the sender (not for our own synced copies).
     if (!outgoing) void this.sendReceipt(payload.from, "delivered", [payload.id]).catch(() => {});
   }
