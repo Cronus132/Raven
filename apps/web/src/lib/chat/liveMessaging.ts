@@ -17,6 +17,7 @@ import type { AccountMeta } from "@/lib/crypto/keystore";
 import { KeystoreSessionStore } from "@/lib/crypto/keystoreSessionStore";
 import { SupabaseTransport } from "@/lib/transport/supabaseTransport";
 import { hkdfSha256, utf8 } from "@/lib/crypto/primitives";
+import { startPresence, stopPresence } from "./livePresence";
 import { useChatStore } from "@/store/useChatStore";
 
 let service: MessagingService | null = null;
@@ -69,12 +70,14 @@ export async function startMessaging(
 
   service = svc;
   await svc.start();
+  startPresence(meta.userId);
 }
 
 export function stopMessaging(): void {
   service?.stop();
   service = null;
   directoryRef = null;
+  stopPresence();
 }
 
 export async function sendLive(peerUserId: string, text: string, messageId: string): Promise<void> {

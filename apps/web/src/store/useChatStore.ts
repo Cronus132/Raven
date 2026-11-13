@@ -44,7 +44,11 @@ interface ChatState {
     remoteId?: string;
   }) => void;
   inboundRemoteIds: (conversationId: string) => string[];
+  setOnlineUsers: (userIds: string[]) => void;
+  setPeerTyping: (peerUserId: string, typing: boolean) => void;
 }
+
+const isUuidId = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
 function hueFromId(s: string): number {
   let h = 0;
@@ -206,6 +210,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
     get()
       .messages.filter((m) => m.conversationId === conversationId && m.senderId !== "me" && m.remoteId)
       .map((m) => m.remoteId as string),
+
+  setOnlineUsers: (userIds) =>
+    set((s) => {
+      const online = new Set(userIds);
+      const users = { ...s.users };
+      let changed = false;
+      for (const id of Object.keys(users)) {
+        if (id === "me" || !isUuidId(id)) continue; // leave demo contacts alone
+        const presence = online.has(id) ? "online" : "offline";
+        if (users[id].presence !== presence) {
+          users[id] = { ...users[id], presence };
+          changed = true;
+        }
+      }
+      return changed ? { users } : {};
+    }),
+
+  setPeerTyping: (peerUserId, typing) =>
+    set((s) => ({
+      conversations: s.conversations.map((c) =>
+        c.id === `d_${peerUserId}` ? { ...c, typingUserIds: typing ? [peerUserId] : [] } : c,
+      ),
+    })),
 
   receiveLiveMessage: ({ peerUserId, username, text, outgoing, remoteId }) => {
     set((s) => {

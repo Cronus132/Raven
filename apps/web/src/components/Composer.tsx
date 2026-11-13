@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Plus, Smile, Mic, SendHorizontal, Lock, X } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
 import { sendLive } from "@/lib/chat/liveMessaging";
+import { sendTyping } from "@/lib/chat/livePresence";
 import { cn } from "@/lib/utils";
 import type { Conversation } from "@/types";
 
@@ -28,9 +29,30 @@ export function Composer({ conv }: { conv: Conversation }) {
     taRef.current?.focus();
   }, [conv.id, replyTo]);
 
+  const typingStop = useRef<ReturnType<typeof setTimeout>>();
+  const lastTyping = useRef(0);
+
+  const stopTyping = () => {
+    if (typingStop.current) clearTimeout(typingStop.current);
+    lastTyping.current = 0;
+    if (conv.real && conv.peerUserId) sendTyping(conv.peerUserId, false);
+  };
+
+  const notifyTyping = () => {
+    if (!conv.real || !conv.peerUserId) return;
+    const now = Date.now();
+    if (now - lastTyping.current > 1800) {
+      sendTyping(conv.peerUserId, true);
+      lastTyping.current = now;
+    }
+    if (typingStop.current) clearTimeout(typingStop.current);
+    typingStop.current = setTimeout(stopTyping, 3500);
+  };
+
   const send = () => {
     const text = draft.trim();
     if (!text) return;
+    stopTyping();
     if (conv.real && conv.peerUserId) {
       // Real E2E send: optimistic bubble, then encrypt + relay.
       const id = appendOutgoing(conv.id, text);
@@ -80,7 +102,10 @@ export function Composer({ conv }: { conv: Conversation }) {
             ref={taRef}
             rows={1}
             value={draft}
-            onChange={(e) => setDraft(conv.id, e.target.value)}
+            onChange={(e) => {
+              setDraft(conv.id, e.target.value);
+              notifyTyping();
+            }}
             onKeyDown={onKeyDown}
             placeholder="Write an encrypted message…"
             className="scroll-slim max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[14.5px] leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:outline-none"
