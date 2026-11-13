@@ -15,6 +15,7 @@ const dec = (b: Uint8Array) => new TextDecoder().decode(b);
 function bundleFrom(secret: DeviceSecret, withOtk = true, otkIndex = 0): ResolvedPreKeyBundle {
   const otk = secret.oneTimePreKeys[otkIndex];
   return {
+    deviceId: secret.deviceId,
     identityKey: secret.identityEd.pub,
     signedPreKey: secret.signedPreKey.keyPair.pub,
     signedPreKeyId: secret.signedPreKey.id,

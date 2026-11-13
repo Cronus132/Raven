@@ -14,16 +14,30 @@
 
 import type { PreKeyBundle } from "./engine";
 import type { DeviceSecret } from "./identity";
+import type { ResolvedPreKeyBundle } from "./x3dh";
+import type { BundleSource } from "./messaging";
 import { type KeyDirectory, type DirectoryDeviceList, demoIdentityKey } from "./directory";
 import { fromBase64, toBase64 } from "./primitives";
 import { supabase, isUuid } from "@/lib/backend/supabase";
+
+interface ClaimedBundle {
+  deviceId: string;
+  userId: string;
+  registrationId: number;
+  identityKey: string;
+  signedPreKeyId: number;
+  signedPreKey: string;
+  signedPreKeySignature: string;
+  oneTimePreKeyId: number | null;
+  oneTimePreKey: string | null;
+}
 
 function client() {
   if (!supabase) throw new Error("Supabase not configured");
   return supabase;
 }
 
-export class SupabaseKeyDirectory implements KeyDirectory {
+export class SupabaseKeyDirectory implements KeyDirectory, BundleSource {
   private demo = new Map<string, Uint8Array>();
 
   constructor(demoUserIds: string[] = []) {
@@ -136,6 +150,27 @@ export class SupabaseKeyDirectory implements KeyDirectory {
       signedPreKey: fromBase64(b.signedPreKey),
       signedPreKeySignature: fromBase64(b.signedPreKeySignature),
       oneTimePreKey: b.oneTimePreKey ? fromBase64(b.oneTimePreKey) : undefined,
+    };
+  }
+
+  /** Claim a prekey bundle for a session, with key ids resolved (consumes one OTK). */
+  async claimBundle(userId: string, deviceId?: string): Promise<ResolvedPreKeyBundle | undefined> {
+    if (!isUuid(userId)) return undefined;
+    const devId = deviceId ?? (await this.primaryDeviceId(userId));
+    if (!devId) return undefined;
+
+    const { data, error } = await client().rpc("claim_prekey_bundle", { p_device_id: devId });
+    if (error || !data) return undefined;
+    const b = data as ClaimedBundle;
+    return {
+      deviceId: b.deviceId,
+      identityKey: fromBase64(b.identityKey),
+      signedPreKey: fromBase64(b.signedPreKey),
+      signedPreKeyId: b.signedPreKeyId,
+      signedPreKeySignature: fromBase64(b.signedPreKeySignature),
+      oneTimePreKey: b.oneTimePreKey ? fromBase64(b.oneTimePreKey) : undefined,
+      oneTimePreKeyId: b.oneTimePreKeyId ?? undefined,
+      registrationId: b.registrationId,
     };
   }
 

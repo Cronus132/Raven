@@ -17,6 +17,7 @@ import { concatBytes, hkdfSha256, utf8 } from "./primitives";
 
 /** A prekey bundle with the key ids resolved (as returned by the directory's claim RPC). */
 export interface ResolvedPreKeyBundle {
+  deviceId: string; // the device this bundle belongs to (for routing)
   identityKey: Uint8Array; // Ed25519 public identity key
   signedPreKey: Uint8Array; // X25519 public
   signedPreKeyId: number;
