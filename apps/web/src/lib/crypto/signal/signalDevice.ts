@@ -109,6 +109,18 @@ export interface SignalMessage {
   body: string; // libsignal binary string
 }
 
+/** Wire format for a signal message on the transport (base64 of the binary body). */
+export function serializeSignalMessage(m: SignalMessage): string {
+  return JSON.stringify({ t: m.type, b: toBase64(Uint8Array.from(m.body, (c) => c.charCodeAt(0) & 0xff)) });
+}
+export function deserializeSignalMessage(s: string): SignalMessage {
+  const o = JSON.parse(s) as { t: number; b: string };
+  const bytes = fromBase64(o.b);
+  let body = "";
+  for (const byte of bytes) body += String.fromCharCode(byte);
+  return { type: o.t, body };
+}
+
 export async function encryptSignal(store: SignalStore, address: SignalProtocolAddress, plaintext: Uint8Array): Promise<SignalMessage> {
   const cipher = new SessionCipher(store, address);
   const m = await cipher.encrypt(toAB(plaintext));
