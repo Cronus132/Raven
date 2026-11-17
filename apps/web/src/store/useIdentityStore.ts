@@ -139,18 +139,28 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   hasBiometric: false,
 
   init: async () => {
-    const [supported, hasPk, bioSupported, hasBio] = await Promise.all([
-      passkeysAvailable(),
-      hasPasskeyStored(),
-      biometric.biometricAvailable(),
-      biometric.hasBiometricCredential(),
-    ]);
-    set({ passkeySupported: supported, hasPasskey: hasPk, biometricSupported: bioSupported, hasBiometric: hasBio });
-    if (await hasStoredIdentity()) {
-      set({ status: "locked", meta: (await loadMeta()) ?? null });
-    } else {
+    // Decide the gate FIRST and never block it on capability probing. A hung
+    // native call (e.g. a biometric probe that never resolves) must not keep the
+    // app stuck on the splash screen — otherwise the status never leaves
+    // "loading" and nothing renders.
+    try {
+      if (await hasStoredIdentity()) {
+        set({ status: "locked", meta: (await loadMeta()) ?? null });
+      } else {
+        set({ status: "none" });
+      }
+    } catch {
       set({ status: "none" });
     }
+
+    // Probe unlock capabilities in the background; update the flags if/when they
+    // resolve. These are timeout-guarded and never throw.
+    void Promise.all([passkeysAvailable().catch(() => false), hasPasskeyStored().catch(() => false)]).then(
+      ([supported, hasPk]) => set({ passkeySupported: supported, hasPasskey: hasPk }),
+    );
+    void Promise.all([biometric.biometricAvailable(), biometric.hasBiometricCredential()]).then(
+      ([bioSupported, hasBio]) => set({ biometricSupported: bioSupported, hasBiometric: hasBio }),
+    );
   },
 
   register: async ({ username, email, passphrase }) => {

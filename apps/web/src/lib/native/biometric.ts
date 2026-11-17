@@ -16,6 +16,9 @@ import { Capacitor } from "@capacitor/core";
 import type { NativeBiometricPlugin } from "capacitor-native-biometric";
 
 const SERVER = "app.raven.messenger";
+// A native plugin call that never settles must never hang app startup — bound
+// the capability probes so they resolve (to a safe default) no matter what.
+const PROBE_TIMEOUT_MS = 6000;
 
 export function isNativePlatform(): boolean {
   try {
@@ -30,26 +33,38 @@ async function plugin(): Promise<NativeBiometricPlugin> {
   return mod.NativeBiometric;
 }
 
+/** Resolve to `fallback` if `p` hasn't settled within `ms` (never rejects). */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 /** True when the device has biometrics set up and we can use them. */
 export async function biometricAvailable(): Promise<boolean> {
   if (!isNativePlatform()) return false;
-  try {
-    const res = await (await plugin()).isAvailable({ useFallback: true });
-    return !!res.isAvailable;
-  } catch {
-    return false;
-  }
+  return withTimeout(
+    (async () => {
+      const res = await (await plugin()).isAvailable({ useFallback: true });
+      return !!res.isAvailable;
+    })(),
+    PROBE_TIMEOUT_MS,
+    false,
+  );
 }
 
 /** True when a passphrase has already been stored behind biometrics on this device. */
 export async function hasBiometricCredential(): Promise<boolean> {
   if (!isNativePlatform()) return false;
-  try {
-    const creds = await (await plugin()).getCredentials({ server: SERVER });
-    return !!creds?.password;
-  } catch {
-    return false;
-  }
+  return withTimeout(
+    (async () => {
+      const creds = await (await plugin()).getCredentials({ server: SERVER });
+      return !!creds?.password;
+    })(),
+    PROBE_TIMEOUT_MS,
+    false,
+  );
 }
 
 /** Store the passphrase in secure storage, gated by biometrics. */
