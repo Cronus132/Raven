@@ -42,7 +42,7 @@ export function ChatPane() {
 function EmptyState() {
   return (
     <div className="bg-grain flex flex-1 flex-col items-center justify-center bg-[var(--color-base)] text-center">
-      <img src="/raven.svg" alt="" className="h-16 w-16 opacity-80" />
+      <img src={`${import.meta.env.BASE_URL}raven.svg`} alt="" className="h-16 w-16 opacity-80" />
       <h2 className="mt-4 text-xl font-semibold">Raven</h2>
       <p className="mt-1 max-w-xs text-sm text-[var(--color-ink-faint)]">
         Select a conversation to start messaging. Everything you send is encrypted on your device.

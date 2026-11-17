@@ -3,7 +3,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
     <div className="bg-grain grid min-h-screen w-screen place-items-center overflow-y-auto bg-[var(--color-base)] px-4 py-10">
       <div className="w-full max-w-[420px]">
         <div className="mb-6 flex flex-col items-center text-center">
-          <img src="/raven.svg" alt="Raven" className="h-12 w-12 no-drag" />
+          <img src={`${import.meta.env.BASE_URL}raven.svg`} alt="Raven" className="h-12 w-12 no-drag" />
           <h1 className="mt-3 text-2xl font-semibold tracking-tight">Raven</h1>
           <p className="mt-1 text-[13px] text-[var(--color-ink-faint)]">End-to-end encrypted. Keys never leave this device.</p>
         </div>
