@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Search, PenSquare, Pin, BellOff, Image as ImageIcon, FileText, Check, CheckCheck } from "lucide-react";
+import { Search, PenSquare, Pin, BellOff, Image as ImageIcon, FileText, Check, CheckCheck, Phone, Archive, ArchiveRestore } from "lucide-react";
 import { useChatStore } from "@/store/useChatStore";
 import { Avatar } from "./Avatar";
 import { TrustBadge } from "./TrustBadge";
@@ -13,11 +13,14 @@ const filters = [
   { id: "groups", label: "Groups" },
 ] as const;
 
+const navTitle = { chats: "Messages", groups: "Groups", calls: "Calls", archive: "Archived" } as const;
+
 export function ConversationList() {
-  const { conversations, messages, activeId, filter, search, me } = useChatStore();
+  const { conversations, messages, activeId, nav, filter, search, me } = useChatStore();
   const select = useChatStore((s) => s.select);
   const setFilter = useChatStore((s) => s.setFilter);
   const setSearch = useChatStore((s) => s.setSearch);
+  const archiveConversation = useChatStore((s) => s.archiveConversation);
   const [newChatOpen, setNewChatOpen] = useState(false);
 
   const lastByConv = useMemo(() => {
@@ -30,9 +33,10 @@ export function ConversationList() {
   }, [messages]);
 
   const list = useMemo(() => {
-    let items = [...conversations];
-    if (filter === "unread") items = items.filter((c) => c.unreadCount > 0);
-    if (filter === "groups") items = items.filter((c) => c.kind === "group");
+    let items = conversations.filter((c) => (nav === "archive" ? c.archived : !c.archived));
+    if (nav === "groups") items = items.filter((c) => c.kind === "group");
+    if (nav === "chats" && filter === "unread") items = items.filter((c) => c.unreadCount > 0);
+    if (nav === "chats" && filter === "groups") items = items.filter((c) => c.kind === "group");
     if (search.trim()) {
       const q = search.toLowerCase();
       items = items.filter((c) => c.title.toLowerCase().includes(q));
@@ -43,19 +47,26 @@ export function ConversationList() {
       const bm = lastByConv[b.id]?.createdAt ?? 0;
       return bm - am;
     });
-  }, [conversations, filter, search, lastByConv]);
+  }, [conversations, nav, filter, search, lastByConv]);
+
+  if (nav === "calls") return <CallsView />;
+
+  const emptyLabel =
+    nav === "groups" ? "No groups yet" : nav === "archive" ? "No archived chats" : "No conversations";
 
   return (
     <section className="flex w-[340px] shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)]">
       <header className="flex items-center justify-between px-4 pb-2 pt-4">
-        <h1 className="text-[17px] font-semibold tracking-tight">Messages</h1>
-        <button
-          onClick={() => setNewChatOpen(true)}
-          className="grid h-9 w-9 place-items-center rounded-full text-[var(--color-ink-dim)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-ink)]"
-          title="New message"
-        >
-          <PenSquare className="h-[18px] w-[18px]" />
-        </button>
+        <h1 className="text-[17px] font-semibold tracking-tight">{navTitle[nav]}</h1>
+        {nav !== "archive" && (
+          <button
+            onClick={() => setNewChatOpen(true)}
+            className="grid h-9 w-9 place-items-center rounded-full text-[var(--color-ink-dim)] transition hover:bg-[var(--color-hover)] hover:text-[var(--color-ink)]"
+            title="New message"
+          >
+            <PenSquare className="h-[18px] w-[18px]" />
+          </button>
+        )}
       </header>
 
       {newChatOpen && <NewChatDialog onClose={() => setNewChatOpen(false)} />}
@@ -72,6 +83,7 @@ export function ConversationList() {
         </div>
       </div>
 
+      {nav === "chats" && (
       <div className="flex gap-1.5 px-4 pb-2">
         {filters.map((f) => (
           <button
@@ -88,10 +100,11 @@ export function ConversationList() {
           </button>
         ))}
       </div>
+      )}
 
       <div className="scroll-slim flex-1 overflow-y-auto px-2 pb-3">
         {list.length === 0 && (
-          <p className="px-4 pt-8 text-center text-sm text-[var(--color-ink-faint)]">No conversations</p>
+          <p className="px-4 pt-8 text-center text-sm text-[var(--color-ink-faint)]">{emptyLabel}</p>
         )}
         {list.map((c) => (
           <ConversationRow
@@ -101,6 +114,7 @@ export function ConversationList() {
             active={c.id === activeId}
             isMine={lastByConv[c.id]?.senderId === me.id}
             onSelect={() => select(c.id)}
+            onArchive={() => archiveConversation(c.id, !c.archived)}
           />
         ))}
       </div>
@@ -114,25 +128,46 @@ function ConversationRow({
   active,
   isMine,
   onSelect,
+  onArchive,
 }: {
   conv: Conversation;
   last?: Message;
   active: boolean;
   isMine: boolean;
   onSelect: () => void;
+  onArchive: () => void;
 }) {
   const userById = useChatStore((s) => s.userById);
   const other = conv.kind === "direct" ? userById(conv.memberIds.find((id) => id !== "me")!) : undefined;
   const typing = conv.typingUserIds.length > 0;
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       className={cn(
-        "group relative flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors",
+        "group relative flex w-full cursor-pointer items-center gap-3 rounded-[var(--radius-md)] px-2.5 py-2.5 text-left transition-colors",
         active ? "bg-[var(--color-active)]" : "hover:bg-[var(--color-hover)]",
       )}
     >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onArchive();
+        }}
+        title={conv.archived ? "Unarchive" : "Archive"}
+        className="absolute right-2 top-2 z-10 grid h-7 w-7 place-items-center rounded-full bg-[var(--color-panel)] text-[var(--color-ink-dim)] opacity-0 shadow-sm transition hover:text-[var(--color-ink)] focus-visible:opacity-100 group-hover:opacity-100"
+      >
+        {conv.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+      </button>
       <Avatar
         name={conv.title}
         hue={conv.avatarHue}
@@ -163,7 +198,27 @@ function ConversationRow({
           </div>
         </div>
       </div>
-    </button>
+    </div>
+  );
+}
+
+function CallsView() {
+  return (
+    <section className="flex w-[340px] shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)]">
+      <header className="flex items-center px-4 pb-2 pt-4">
+        <h1 className="text-[17px] font-semibold tracking-tight">Calls</h1>
+      </header>
+      <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
+        <div className="grid h-14 w-14 place-items-center rounded-full bg-[var(--color-hover)]">
+          <Phone className="h-6 w-6 text-[var(--color-ink-faint)]" />
+        </div>
+        <h2 className="mt-4 text-[15px] font-semibold">No calls yet</h2>
+        <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-ink-faint)]">
+          Encrypted voice &amp; video calling isn't available in this build. Your call history will
+          appear here once it ships.
+        </p>
+      </div>
+    </section>
   );
 }
 

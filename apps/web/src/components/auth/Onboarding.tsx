@@ -10,22 +10,21 @@ export function Onboarding() {
   const busy = useIdentityStore((s) => s.busy);
   const error = useIdentityStore((s) => s.error);
   const [mode, setMode] = useState<"register" | "signin">("register");
-
-  if (mode === "signin") return <SignIn onBack={() => setMode("register")} />;
-
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
+  const strength = useMemo(() => passStrength(pass), [pass]);
+
+  // All hooks must run before this conditional return (Rules of Hooks).
+  if (mode === "signin") return <SignIn onBack={() => setMode("register")} />;
 
   const usernameValid = /^[a-z0-9_]{3,20}$/.test(username);
   const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
   const passValid = pass.length >= 10;
   const match = pass.length > 0 && pass === confirm;
   const canSubmit = usernameValid && emailValid && passValid && match && !busy;
-
-  const strength = useMemo(() => passStrength(pass), [pass]);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

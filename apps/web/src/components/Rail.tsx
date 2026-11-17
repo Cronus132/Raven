@@ -2,10 +2,10 @@ import { useState } from "react";
 import { MessageSquare, Users, Phone, Archive, Settings, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./Avatar";
-import { useChatStore } from "@/store/useChatStore";
+import { useChatStore, type NavView } from "@/store/useChatStore";
 import { ProfileSheet } from "./ProfileSheet";
 
-const items: { id: string; icon: LucideIcon; label: string; badge?: number }[] = [
+const items: { id: NavView; icon: LucideIcon; label: string }[] = [
   { id: "chats", icon: MessageSquare, label: "Chats" },
   { id: "groups", icon: Users, label: "Groups" },
   { id: "calls", icon: Phone, label: "Calls" },
@@ -14,7 +14,8 @@ const items: { id: string; icon: LucideIcon; label: string; badge?: number }[] =
 
 export function Rail() {
   const me = useChatStore((s) => s.me);
-  const [active, setActive] = useState("chats");
+  const nav = useChatStore((s) => s.nav);
+  const setNav = useChatStore((s) => s.setNav);
   const [profileOpen, setProfileOpen] = useState(false);
 
   return (
@@ -29,13 +30,13 @@ export function Rail() {
             key={it.id}
             icon={it.icon}
             label={it.label}
-            active={active === it.id}
-            onClick={() => setActive(it.id)}
+            active={nav === it.id}
+            onClick={() => setNav(it.id)}
           />
         ))}
       </div>
 
-      <RailButton icon={Settings} label="Settings" active={active === "settings"} onClick={() => setActive("settings")} />
+      <RailButton icon={Settings} label="Settings" active={profileOpen} onClick={() => setProfileOpen(true)} />
       <button
         onClick={() => setProfileOpen(true)}
         className="mt-2 rounded-full outline-none ring-[var(--color-accent)] transition hover:opacity-90 focus-visible:ring-2"

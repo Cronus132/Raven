@@ -3,6 +3,7 @@ import type { Attachment, Conversation, Message, MessageStatus, TrustLevel, User
 import { CONVERSATIONS, MESSAGES, USERS, ME } from "@/data/seed";
 
 type Filter = "all" | "unread" | "groups";
+export type NavView = "chats" | "groups" | "calls" | "archive";
 
 interface ChatState {
   me: User;
@@ -11,6 +12,7 @@ interface ChatState {
   messages: Message[];
 
   activeId: string | null;
+  nav: NavView;
   filter: Filter;
   search: string;
   showDetails: boolean;
@@ -23,6 +25,8 @@ interface ChatState {
 
   // actions
   select: (id: string) => void;
+  setNav: (v: NavView) => void;
+  archiveConversation: (id: string, archived: boolean) => void;
   setFilter: (f: Filter) => void;
   setSearch: (q: string) => void;
   toggleDetails: () => void;
@@ -158,7 +162,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   conversations: CONVERSATIONS,
   messages: MESSAGES,
 
-  activeId: "c_aria",
+  activeId: null,
+  nav: "chats",
   filter: "all",
   search: "",
   showDetails: false,
@@ -175,6 +180,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ activeId: id, replyTo: null });
     get().markRead(id);
   },
+
+  setNav: (nav) => set({ nav }),
+  archiveConversation: (id, archived) =>
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived } : c)),
+      activeId: archived && s.activeId === id ? null : s.activeId,
+    })),
 
   setFilter: (filter) => set({ filter }),
   setSearch: (search) => set({ search }),

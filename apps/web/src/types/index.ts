@@ -72,6 +72,7 @@ export interface Conversation {
   trust: TrustLevel; // safety-number state for direct; group verification summary
   muted?: boolean;
   pinned?: boolean;
+  archived?: boolean;
   unreadCount: number;
   lastReadAt: number;
   draft?: string;
