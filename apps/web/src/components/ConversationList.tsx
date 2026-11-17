@@ -54,8 +54,11 @@ export function ConversationList() {
   const emptyLabel =
     nav === "groups" ? "No groups yet" : nav === "archive" ? "No archived chats" : "No conversations";
 
+  // On phones only one pane shows: hide the list once a chat is open.
+  const paneVisibility = activeId ? "hidden md:flex" : "flex";
+
   return (
-    <section className="flex w-[340px] shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)]">
+    <section className={cn(paneVisibility, "w-full shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] md:flex md:w-[340px]")}>
       <header className="flex items-center justify-between px-4 pb-2 pt-4">
         <h1 className="text-[17px] font-semibold tracking-tight">{navTitle[nav]}</h1>
         {nav !== "archive" && (
@@ -204,7 +207,7 @@ function ConversationRow({
 
 function CallsView() {
   return (
-    <section className="flex w-[340px] shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)]">
+    <section className="flex w-full shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] md:w-[340px]">
       <header className="flex items-center px-4 pb-2 pt-4">
         <h1 className="text-[17px] font-semibold tracking-tight">Calls</h1>
       </header>

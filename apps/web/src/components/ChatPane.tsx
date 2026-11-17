@@ -25,7 +25,14 @@ export function ChatPane() {
     if (conv?.real && conv.peerUserId) void checkPeerKey(conv.peerUserId);
   }, [conv?.id, conv?.real, conv?.peerUserId]);
 
-  if (!conv) return <EmptyState />;
+  // On phones the empty pane must not sit beside the list (there's no room) —
+  // the list fills the screen instead. Show the empty state on md+ only.
+  if (!conv)
+    return (
+      <div className="hidden min-w-0 flex-1 md:flex">
+        <EmptyState />
+      </div>
+    );
 
   return (
     <div className="flex min-w-0 flex-1">

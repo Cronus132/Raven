@@ -13,7 +13,7 @@ export function DetailsPanel({ conv }: { conv: Conversation }) {
   const other = conv.kind === "direct" ? userById(conv.memberIds.find((id) => id !== "me")!) : undefined;
 
   return (
-    <aside className="scroll-slim flex w-[320px] shrink-0 flex-col overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-panel)]">
+    <aside className="scroll-slim flex w-full shrink-0 flex-col overflow-y-auto border-l border-[var(--color-line)] bg-[var(--color-panel)] max-md:fixed max-md:inset-0 max-md:z-40 md:w-[320px]">
       <div className="flex h-16 shrink-0 items-center justify-between border-b border-[var(--color-line)] px-4">
         <h2 className="text-[15px] font-semibold">Details</h2>
         <button

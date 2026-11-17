@@ -16,9 +16,11 @@
 import {
   aeadOpen,
   aeadSeal,
+  deriveWrappingKey,
   fromBase64,
   hkdfSha256,
   type SealedBox,
+  sha256,
   toBase64,
   utf8,
 } from "@/lib/crypto/primitives";
@@ -104,6 +106,19 @@ async function idbDelete(key: string): Promise<void> {
 /** Derive a distinct at-rest key for message history from the keystore wrapping key. */
 export function deriveHistoryKey(wrappingKey: Uint8Array, userId: string): Uint8Array {
   return hkdfSha256(wrappingKey, utf8(userId), utf8("raven-history-v1"), 32);
+}
+
+/**
+ * Portable archive key — for the durable cross-device archive (Phase 2).
+ *
+ * Derived from the passphrase + a deterministic per-user salt, so EVERY one of
+ * the user's devices derives the same key and can read the archive. (The local
+ * history key above uses the per-device keystore wrapping key, which is not
+ * portable.) The salt is not secret; strength rests on the passphrase, as it
+ * already does for the local keystore. The key never leaves the device.
+ */
+export function deriveArchiveKey(passphrase: string, userId: string): Uint8Array {
+  return deriveWrappingKey(passphrase, sha256(utf8(userId)));
 }
 
 // ---- pure codec (seal/unseal a snapshot) — unit-tested without IndexedDB ----

@@ -12,8 +12,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@capacitor/core": "6.2.0",
     "@noble/curves": "^1.7.0",
     "@noble/hashes": "^1.6.1",
+    "capacitor-native-biometric": "^4.2.2",
     "@privacyresearch/libsignal-protocol-typescript": "^0.0.16",
     "@supabase/supabase-js": "^2.119.0",
     "clsx": "2.1.1",

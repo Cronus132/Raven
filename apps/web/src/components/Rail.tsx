@@ -19,7 +19,7 @@ export function Rail() {
   const [profileOpen, setProfileOpen] = useState(false);
 
   return (
-    <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-[var(--color-line)] bg-[var(--color-rail)] py-4">
+    <nav className="hidden w-[72px] shrink-0 flex-col items-center gap-1 border-r border-[var(--color-line)] bg-[var(--color-rail)] py-4 md:flex">
       <div className="mb-3 grid h-11 w-11 place-items-center">
         <img src={`${import.meta.env.BASE_URL}raven.svg`} alt="Raven" className="h-9 w-9 no-drag" />
       </div>

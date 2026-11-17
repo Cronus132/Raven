@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { deriveHistoryKey, openSnapshot, sealSnapshot, type HistorySnapshot } from "./historyStore";
+import { deriveArchiveKey, deriveHistoryKey, openSnapshot, sealSnapshot, type HistorySnapshot } from "./historyStore";
 import { useChatStore } from "@/store/useChatStore";
-import { randomBytes } from "@/lib/crypto/primitives";
+import { randomBytes, toHex } from "@/lib/crypto/primitives";
 import type { Conversation, Message } from "@/types";
 
 function sampleSnapshot(): HistorySnapshot {
@@ -46,6 +46,30 @@ describe("message history codec", () => {
     const rec = await sealSnapshot("user-a", deriveHistoryKey(wrapping, "user-a"), sampleSnapshot());
     // Same wrapping material, different user id → different derived key + AAD.
     expect(await openSnapshot("user-b", deriveHistoryKey(wrapping, "user-b"), rec)).toBeNull();
+  });
+});
+
+describe("portable archive key (cross-device)", () => {
+  it("is identical for the same passphrase + user on any device", () => {
+    const a = deriveArchiveKey("correct horse battery staple", "user-123");
+    const b = deriveArchiveKey("correct horse battery staple", "user-123");
+    expect(toHex(a)).toBe(toHex(b)); // deterministic → a new device derives the same key
+  });
+
+  it("differs by passphrase and by user", () => {
+    const base = toHex(deriveArchiveKey("passphrase-one", "user-123"));
+    expect(toHex(deriveArchiveKey("passphrase-two", "user-123"))).not.toBe(base);
+    expect(toHex(deriveArchiveKey("passphrase-one", "user-999"))).not.toBe(base);
+  });
+
+  it("round-trips the archive snapshot (new device restores history)", async () => {
+    const userId = "33333333-3333-3333-3333-333333333333";
+    const key = deriveArchiveKey("a strong passphrase", userId);
+    const snap = sampleSnapshot();
+    const rec = await sealSnapshot(userId, key, snap);
+    // A second device derives the same key from the passphrase and opens it.
+    const onNewDevice = deriveArchiveKey("a strong passphrase", userId);
+    expect(await openSnapshot(userId, onNewDevice, rec)).toEqual(snap);
   });
 });
 

@@ -13,10 +13,16 @@ export function ProfileSheet({ onClose }: { onClose: () => void }) {
   const hasPasskey = useIdentityStore((s) => s.hasPasskey);
   const enrollPasskey = useIdentityStore((s) => s.enrollPasskey);
   const removePasskey = useIdentityStore((s) => s.removePasskey);
+  const biometricSupported = useIdentityStore((s) => s.biometricSupported);
+  const hasBiometric = useIdentityStore((s) => s.hasBiometric);
+  const enrollBiometric = useIdentityStore((s) => s.enrollBiometric);
+  const removeBiometric = useIdentityStore((s) => s.removeBiometric);
   const [copied, setCopied] = useState(false);
   const [confirmWipe, setConfirmWipe] = useState(false);
   const [pkBusy, setPkBusy] = useState(false);
   const [pkError, setPkError] = useState<string | null>(null);
+  const [bioBusy, setBioBusy] = useState(false);
+  const [bioError, setBioError] = useState<string | null>(null);
 
   if (!meta) return null;
 
@@ -38,6 +44,27 @@ export function ProfileSheet({ onClose }: { onClose: () => void }) {
       await removePasskey();
     } finally {
       setPkBusy(false);
+    }
+  };
+
+  const addBiometric = async () => {
+    setBioBusy(true);
+    setBioError(null);
+    try {
+      await enrollBiometric();
+    } catch (e) {
+      setBioError(e instanceof Error ? e.message : "Couldn't enable biometrics.");
+    } finally {
+      setBioBusy(false);
+    }
+  };
+
+  const dropBiometric = async () => {
+    setBioBusy(true);
+    try {
+      await removeBiometric();
+    } finally {
+      setBioBusy(false);
     }
   };
 
@@ -127,6 +154,41 @@ export function ProfileSheet({ onClose }: { onClose: () => void }) {
             ) : null}
           </div>
         </div>
+
+        {biometricSupported && (
+          <div className="border-t border-[var(--color-line)] px-4 py-3">
+            <div className="flex items-start gap-3 rounded-[var(--radius-md)] bg-[var(--color-base)] px-3 py-2.5 ring-1 ring-[var(--color-line)]">
+              <Fingerprint className="mt-0.5 h-[18px] w-[18px] shrink-0 text-[var(--color-accent)]" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-medium text-[var(--color-ink)]">Biometric unlock</p>
+                <p className="mt-0.5 text-[11.5px] leading-snug text-[var(--color-ink-faint)]">
+                  {hasBiometric
+                    ? "Enabled — unlock with your fingerprint or face. Your passphrase still works."
+                    : "Unlock with your fingerprint or face instead of typing your passphrase."}
+                </p>
+                {bioError && <p className="mt-1 text-[11.5px] text-[var(--color-warn)]">{bioError}</p>}
+              </div>
+              {hasBiometric ? (
+                <button
+                  onClick={() => void dropBiometric()}
+                  disabled={bioBusy}
+                  className="shrink-0 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--color-ink-faint)] transition hover:text-[var(--color-warn)] disabled:opacity-60"
+                >
+                  {bioBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Remove"}
+                </button>
+              ) : (
+                <button
+                  onClick={() => void addBiometric()}
+                  disabled={bioBusy}
+                  className="flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-[color-mix(in_oklab,var(--color-accent)_16%,transparent)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--color-accent)] transition hover:bg-[color-mix(in_oklab,var(--color-accent)_24%,transparent)] disabled:opacity-60"
+                >
+                  {bioBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                  Add
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="space-y-2 border-t border-[var(--color-line)] p-4">
           <button

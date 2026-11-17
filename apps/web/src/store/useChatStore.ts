@@ -28,6 +28,7 @@ interface ChatState {
   hydrateHistory: (snap: HistorySnapshot) => void;
   resetChat: () => void;
   select: (id: string) => void;
+  clearActive: () => void;
   setNav: (v: NavView) => void;
   archiveConversation: (id: string, archived: boolean) => void;
   setFilter: (f: Filter) => void;
@@ -203,6 +204,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ activeId: id, replyTo: null });
     get().markRead(id);
   },
+
+  clearActive: () => set({ activeId: null, replyTo: null, showDetails: false }),
 
   setNav: (nav) => set({ nav }),
   archiveConversation: (id, archived) =>

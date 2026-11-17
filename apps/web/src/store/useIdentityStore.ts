@@ -30,6 +30,8 @@ import {
 import { supabase, isSupabaseConfigured, deriveAuthPassword } from "@/lib/backend/supabase";
 import { startMessaging, stopMessaging } from "@/lib/chat/liveMessaging";
 import { startHistoryPersistence, stopHistoryPersistence, wipeHistory } from "@/lib/chat/historyPersistence";
+import { startArchiveSync, stopArchiveSync } from "@/lib/chat/archiveSync";
+import * as biometric from "@/lib/native/biometric";
 import { USERS } from "@/data/seed";
 import { useChatStore } from "./useChatStore";
 
@@ -96,6 +98,8 @@ interface IdentityState {
   busy: boolean;
   passkeySupported: boolean;
   hasPasskey: boolean;
+  biometricSupported: boolean;
+  hasBiometric: boolean;
 
   init: () => Promise<void>;
   register: (input: { username: string; email: string; passphrase: string }) => Promise<void>;
@@ -104,6 +108,9 @@ interface IdentityState {
   unlockWithPasskey: () => Promise<void>;
   enrollPasskey: () => Promise<void>;
   removePasskey: () => Promise<void>;
+  unlockWithBiometric: () => Promise<void>;
+  enrollBiometric: () => Promise<void>;
+  removeBiometric: () => Promise<void>;
   lock: () => void;
   wipe: () => Promise<void>;
   clearError: () => void;
@@ -128,10 +135,17 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   busy: false,
   passkeySupported: false,
   hasPasskey: false,
+  biometricSupported: false,
+  hasBiometric: false,
 
   init: async () => {
-    const [supported, hasPk] = await Promise.all([passkeysAvailable(), hasPasskeyStored()]);
-    set({ passkeySupported: supported, hasPasskey: hasPk });
+    const [supported, hasPk, bioSupported, hasBio] = await Promise.all([
+      passkeysAvailable(),
+      hasPasskeyStored(),
+      biometric.biometricAvailable(),
+      biometric.hasBiometricCredential(),
+    ]);
+    set({ passkeySupported: supported, hasPasskey: hasPk, biometricSupported: bioSupported, hasBiometric: hasBio });
     if (await hasStoredIdentity()) {
       set({ status: "locked", meta: (await loadMeta()) ?? null });
     } else {
@@ -177,6 +191,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       syncMe(meta);
       set({ status: "unlocked", device, meta, passphrase, busy: false });
       void startHistoryPersistence(userId, wrappingKey).catch(() => {});
+      void startArchiveSync(userId, passphrase).catch(() => {});
       void startMessaging(buildEngine(device, wrappingKey), meta, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Registration failed" });
@@ -211,6 +226,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       syncMe(meta);
       set({ status: "unlocked", device, meta, passphrase, busy: false });
       void startHistoryPersistence(uid, wrappingKey).catch(() => {});
+      void startArchiveSync(uid, passphrase).catch(() => {});
       void startMessaging(buildEngine(device, wrappingKey), meta, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Sign-in failed" });
@@ -233,6 +249,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
             const { error } = await supabase.auth.signInWithPassword({ email: meta.email.trim(), password });
             if (!error) {
               await publishDevice(device.bundle, meta.userId, device.deviceId);
+              void startArchiveSync(meta.userId, passphrase).catch(() => {});
               await startMessaging(buildEngine(device, wrappingKey), meta, directory);
             }
           } catch {
@@ -274,15 +291,41 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     set({ hasPasskey: false });
   },
 
+  unlockWithBiometric: async () => {
+    set({ busy: true, error: null });
+    try {
+      const passphrase = await biometric.biometricUnlock();
+      await get().unlock(passphrase);
+    } catch (e) {
+      set({ busy: false, error: e instanceof Error ? e.message : "Biometric unlock failed." });
+    }
+  },
+
+  enrollBiometric: async () => {
+    const { meta, passphrase } = get();
+    if (!meta || !passphrase) throw new Error("Unlock the app before adding biometrics.");
+    await biometric.enrollBiometric(meta.username, passphrase);
+    set({ hasBiometric: true });
+  },
+
+  removeBiometric: async () => {
+    await biometric.removeBiometric();
+    set({ hasBiometric: false });
+  },
+
   lock: () => {
     stopMessaging();
     stopHistoryPersistence();
+    stopArchiveSync();
     if (supabase) void supabase.auth.signOut();
     set({ status: "locked", device: null, passphrase: null, error: null });
   },
 
   wipe: async () => {
     stopMessaging();
+    // Stop syncing, but leave the server archive intact — it's the user's
+    // cross-device backup; wiping this device shouldn't erase it everywhere.
+    stopArchiveSync();
     const meta = get().meta;
     if (meta) await wipeHistory(meta.userId);
     if (supabase) {

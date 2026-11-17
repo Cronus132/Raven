@@ -24,7 +24,8 @@ function stripVolatile(m: Message): Message {
   return { ...m, attachment };
 }
 
-function snapshot(): HistorySnapshot {
+/** Build a persistable snapshot of the current store (shared with archive sync). */
+export function buildSnapshot(): HistorySnapshot {
   const s = useChatStore.getState();
   return {
     v: 1,
@@ -40,7 +41,7 @@ function scheduleSave(): void {
   timer = setTimeout(() => {
     const c = ctx;
     if (!c) return;
-    void saveHistory(c.userId, c.histKey, snapshot()).catch(() => {});
+    void saveHistory(c.userId, c.histKey, buildSnapshot()).catch(() => {});
   }, SAVE_DEBOUNCE_MS);
 }
 

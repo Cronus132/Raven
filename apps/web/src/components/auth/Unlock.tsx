@@ -8,7 +8,9 @@ import { AuthShell, inputClass } from "./AuthShell";
 export function Unlock() {
   const unlock = useIdentityStore((s) => s.unlock);
   const unlockWithPasskey = useIdentityStore((s) => s.unlockWithPasskey);
+  const unlockWithBiometric = useIdentityStore((s) => s.unlockWithBiometric);
   const hasPasskey = useIdentityStore((s) => s.hasPasskey);
+  const hasBiometric = useIdentityStore((s) => s.hasBiometric);
   const wipe = useIdentityStore((s) => s.wipe);
   const meta = useIdentityStore((s) => s.meta);
   const busy = useIdentityStore((s) => s.busy);
@@ -35,23 +37,36 @@ export function Unlock() {
           </p>
         </div>
 
+        {hasBiometric && (
+          <button
+            type="button"
+            onClick={() => void unlockWithBiometric()}
+            disabled={busy}
+            className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] py-2.5 text-[14px] font-semibold text-[var(--color-accent-ink)] transition hover:bg-[var(--color-accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}
+            Unlock with biometrics
+          </button>
+        )}
+
         {hasPasskey && (
-          <>
-            <button
-              type="button"
-              onClick={() => void unlockWithPasskey()}
-              disabled={busy}
-              className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] py-2.5 text-[14px] font-semibold text-[var(--color-accent-ink)] transition hover:bg-[var(--color-accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}
-              Unlock with passkey
-            </button>
-            <div className="flex items-center gap-3">
-              <span className="h-px flex-1 bg-[var(--color-line)]" />
-              <span className="text-[11px] uppercase tracking-wide text-[var(--color-ink-faint)]">or passphrase</span>
-              <span className="h-px flex-1 bg-[var(--color-line)]" />
-            </div>
-          </>
+          <button
+            type="button"
+            onClick={() => void unlockWithPasskey()}
+            disabled={busy}
+            className="flex w-full items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-accent)] py-2.5 text-[14px] font-semibold text-[var(--color-accent-ink)] transition hover:bg-[var(--color-accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}
+            Unlock with passkey
+          </button>
+        )}
+
+        {(hasBiometric || hasPasskey) && (
+          <div className="flex items-center gap-3">
+            <span className="h-px flex-1 bg-[var(--color-line)]" />
+            <span className="text-[11px] uppercase tracking-wide text-[var(--color-ink-faint)]">or passphrase</span>
+            <span className="h-px flex-1 bg-[var(--color-line)]" />
+          </div>
         )}
 
         <div className="relative">
@@ -62,7 +77,7 @@ export function Unlock() {
             onChange={(e) => setPass(e.target.value)}
             placeholder="Enter your passphrase"
             autoComplete="current-password"
-            autoFocus={!hasPasskey}
+            autoFocus={!hasPasskey && !hasBiometric}
           />
           <button
             type="button"
