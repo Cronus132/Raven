@@ -47,10 +47,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v3
       - run: npm ci
       - name: Build web + sync Capacitor
         run: npm run sync --workspace apps/mobile
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
       - name: Assemble debug APK
         run: |
           cd apps/mobile/android
