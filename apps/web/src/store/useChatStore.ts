@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Attachment, Conversation, Message, MessageStatus, TrustLevel, User } from "@/types";
+import type { HistorySnapshot } from "@/lib/chat/historyStore";
 import { CONVERSATIONS, MESSAGES, USERS, ME } from "@/data/seed";
 
 type Filter = "all" | "unread" | "groups";
@@ -24,6 +25,8 @@ interface ChatState {
   userById: (id: string) => User | undefined;
 
   // actions
+  hydrateHistory: (snap: HistorySnapshot) => void;
+  resetChat: () => void;
   select: (id: string) => void;
   setNav: (v: NavView) => void;
   archiveConversation: (id: string, archived: boolean) => void;
@@ -168,6 +171,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
   search: "",
   showDetails: false,
   replyTo: null,
+
+  // Merge a saved snapshot into the live store. Current (in-memory) entries win
+  // on id conflicts so a just-arrived live message/receipt is never clobbered by
+  // an older persisted copy; stored-only entries fill in the restored history.
+  hydrateHistory: (snap) =>
+    set((s) => {
+      const msgs = new Map<string, Message>();
+      for (const m of snap.messages) msgs.set(m.id, m);
+      for (const m of s.messages) msgs.set(m.id, m);
+      const convs = new Map<string, Conversation>();
+      for (const c of snap.conversations) convs.set(c.id, c);
+      for (const c of s.conversations) convs.set(c.id, c);
+      return {
+        users: { ...snap.users, ...s.users },
+        conversations: [...convs.values()],
+        messages: [...msgs.values()],
+      };
+    }),
+
+  resetChat: () => set({ users: { me: ME }, conversations: [], messages: [], activeId: null }),
 
   conversationById: (id) => get().conversations.find((c) => c.id === id),
   messagesFor: (id) =>

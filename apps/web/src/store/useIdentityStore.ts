@@ -29,6 +29,7 @@ import {
 } from "@/lib/crypto/passkey";
 import { supabase, isSupabaseConfigured, deriveAuthPassword } from "@/lib/backend/supabase";
 import { startMessaging, stopMessaging } from "@/lib/chat/liveMessaging";
+import { startHistoryPersistence, stopHistoryPersistence, wipeHistory } from "@/lib/chat/historyPersistence";
 import { USERS } from "@/data/seed";
 import { useChatStore } from "./useChatStore";
 
@@ -175,6 +176,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       await publishDevice(device.bundle, userId, device.deviceId);
       syncMe(meta);
       set({ status: "unlocked", device, meta, passphrase, busy: false });
+      void startHistoryPersistence(userId, wrappingKey).catch(() => {});
       void startMessaging(buildEngine(device, wrappingKey), meta, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Registration failed" });
@@ -208,6 +210,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       await publishDevice(device.bundle, uid, device.deviceId);
       syncMe(meta);
       set({ status: "unlocked", device, meta, passphrase, busy: false });
+      void startHistoryPersistence(uid, wrappingKey).catch(() => {});
       void startMessaging(buildEngine(device, wrappingKey), meta, directory).catch(() => {});
     } catch (e) {
       set({ busy: false, error: e instanceof Error ? e.message : "Sign-in failed" });
@@ -221,6 +224,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       const device = deserializeDevice(secret);
       syncMe(meta);
       set({ status: "unlocked", device, meta, passphrase, busy: false });
+      void startHistoryPersistence(meta.userId, wrappingKey).catch(() => {});
 
       if (isSupabaseConfigured && supabase) {
         void (async () => {
@@ -272,6 +276,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
 
   lock: () => {
     stopMessaging();
+    stopHistoryPersistence();
     if (supabase) void supabase.auth.signOut();
     set({ status: "locked", device: null, passphrase: null, error: null });
   },
@@ -279,6 +284,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
   wipe: async () => {
     stopMessaging();
     const meta = get().meta;
+    if (meta) await wipeHistory(meta.userId);
     if (supabase) {
       try {
         if (meta) await supabase.from("devices").delete().eq("id", meta.deviceId);
@@ -288,6 +294,7 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       }
     }
     await wipeIdentity();
+    useChatStore.getState().resetChat();
     set({ status: "none", device: null, meta: null, passphrase: null, error: null, hasPasskey: false });
   },
 
