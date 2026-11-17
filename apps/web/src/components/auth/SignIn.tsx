@@ -36,7 +36,7 @@ export function SignIn({ onBack }: { onBack: () => void }) {
           <input
             className={inputClass}
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => setEmail(e.target.value.trim())}
             placeholder="you@example.com"
             autoComplete="email"
             inputMode="email"

@@ -64,6 +64,19 @@ async function publishDevice(bundle: SignalPublicBundle, userId: string, deviceI
   await directory.publishSignalBundle?.(bundle, userId, deviceId);
 }
 
+/** Reject after `ms` so a hung backend (e.g. an auth outage) can't wedge the
+ *  form with busy=true forever. The underlying request may still settle later;
+ *  we just stop waiting and surface a retryable error. */
+const AUTH_TIMEOUT_MS = 20_000;
+function withTimeout<T>(p: PromiseLike<T>, label: string, ms = AUTH_TIMEOUT_MS): Promise<T> {
+  return Promise.race([
+    Promise.resolve(p),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out — the server may be unreachable. Please try again.`)), ms),
+    ),
+  ]);
+}
+
 function mapAuthError(msg: string): string {
   const m = msg.toLowerCase();
   if (m.includes("already registered") || m.includes("already been registered"))
@@ -131,7 +144,10 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
       let userId: string;
       if (isSupabaseConfigured && supabase) {
         const password = deriveAuthPassword(email, passphrase);
-        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { username } } });
+        const { data, error } = await withTimeout(
+          supabase.auth.signUp({ email: email.trim(), password, options: { data: { username } } }),
+          "Sign-up",
+        );
         if (error) throw new Error(mapAuthError(error.message));
         const uid = data.user?.id;
         if (!uid) throw new Error("Sign-up did not return an account.");
@@ -170,7 +186,10 @@ export const useIdentityStore = create<IdentityState>((set, get) => ({
     try {
       if (!(isSupabaseConfigured && supabase)) throw new Error("Sign-in needs the backend configured.");
       const password = deriveAuthPassword(email, passphrase);
-      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({ email: email.trim(), password }),
+        "Sign-in",
+      );
       if (error || !data.user) throw new Error("Incorrect email or passphrase.");
       const uid = data.user.id;
       const username = (await directory.usernameOf?.(uid)) ?? email.split("@")[0];

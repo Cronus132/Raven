@@ -60,11 +60,14 @@ export function Onboarding() {
           <input
             className={inputClass}
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => setEmail(e.target.value.trim())}
             placeholder="you@example.com"
             autoComplete="email"
             inputMode="email"
           />
+          {email.length > 0 && !emailValid && (
+            <p className="mt-1 text-[11px] text-[var(--color-warn)]">Enter a valid email address.</p>
+          )}
         </Field>
 
         <Field label="Passphrase" hint="encrypts your keys">
